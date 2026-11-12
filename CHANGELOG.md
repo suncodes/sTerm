@@ -2,6 +2,12 @@
 
 All notable changes to sTerm are documented in this file.
 
+## [0.1.1] - 2026-11-12
+
+### Fixed
+
+- Build the frontend before Rust tests in the tag-triggered release workflow.
+
 ## [0.1.0] - 2026-11-12
 
 ### Added
