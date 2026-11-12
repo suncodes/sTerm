@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>sTerm</title>
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <div class="sidebar-header">
+          <span class="sidebar-title">工作区</span>
+          <button id="btn-add-folder" title="新建根文件夹">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.8l1.4 1.8h5.2A1.5 1.5 0 0 1 14.4 6.3v5.2a1.5 1.5 0 0 1-1.5 1.5h-9.4a1.5 1.5 0 0 1-1.5-1.5v-7z" stroke="currentColor" stroke-width="1.3" />
+              <path d="M8.2 7v3.2M6.6 8.6h3.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+            </svg>
+          </button>
+          <button id="btn-import-ws" title="扫描 claude / codex 历史工作区">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M2 5.2V3.5A1.5 1.5 0 0 1 3.5 2h1.7M10.8 2h1.7A1.5 1.5 0 0 1 14 3.5v1.7M14 10.8v1.7a1.5 1.5 0 0 1-1.5 1.5h-1.7M5.2 14H3.5A1.5 1.5 0 0 1 2 12.5v-1.7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+              <path d="M2.5 8h11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+            </svg>
+          </button>
+        </div>
+        <div id="ws-list" class="ws-list"></div>
+        <div id="ws-empty" class="ws-empty">
+          <div class="ws-empty-glyph">&gt;_</div>
+          暂无工作区<br />
+          <span class="dim">在终端运行 claude / codex 时<br />会提示保存到此处</span>
+        </div>
+      </aside>
+      <div id="splitter" title="拖动调整宽度 · 双击恢复默认"></div>
+      <main id="main">
+        <div id="tabbar" data-tauri-drag-region>
+          <button id="btn-toggle-sidebar" title="切换侧栏 (Ctrl+B)">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+              <path d="M2 4h12M2 8h12M2 12h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            </svg>
+          </button>
+          <div class="tabs-wrap" data-tauri-drag-region>
+            <div id="tabs" data-tauri-drag-region></div>
+            <button id="btn-new-tab" title="新建标签 (Ctrl+T)">＋</button>
+          </div>
+          <button id="btn-tab-list" title="所有标签">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+              <path d="M3.5 6l4.5 4.5L12.5 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <button id="btn-settings" title="设置">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.15.24a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.15.24a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.15-.24a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.15-.24a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          </button>
+          <div class="win-controls">
+            <button id="btn-win-min" title="最小化">
+              <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1" fill="none"><path d="M0.5 5.5h9" /></svg>
+            </button>
+            <button id="btn-win-max" title="最大化">
+              <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1" fill="none"><rect x="1.5" y="1.5" width="7" height="7" rx="0.5" /></svg>
+            </button>
+            <button id="btn-win-close" title="关闭">
+              <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1" fill="none"><path d="M0.7 0.7l8.6 8.6M9.3 0.7l-8.6 8.6" /></svg>
+            </button>
+          </div>
+        </div>
+        <div id="term-wrap">
+          <div id="search-box" class="hidden">
+            <input id="search-input" placeholder="查找..." spellcheck="false" />
+            <button id="search-prev" title="上一个 (Shift+Enter)">↑</button>
+            <button id="search-next" title="下一个 (Enter)">↓</button>
+            <span id="search-count"></span>
+            <button id="search-close" title="关闭 (Esc)">✕</button>
+          </div>
+          <div id="panes"></div>
+          <div id="empty-state" class="hidden">
+            <div class="empty-glyph">&gt;_</div>
+            <div class="empty-title">没有打开的会话</div>
+            <button id="btn-empty-new">新建会话 (Ctrl+T)</button>
+          </div>
+        </div>
+        <div id="statusbar">
+          <span class="dot"></span>
+          <span id="status-shell">…</span>
+          <span class="sep">·</span>
+          <span id="status-tabs">1 个标签</span>
+          <span id="status-hint">Ctrl+滚轮 字号 · Ctrl+F 查找</span>
+          <span id="status-size"></span>
+          <span id="status-agent" data-status="none"></span>
+        </div>
+      </main>
+    </div>
+    <div id="toasts"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

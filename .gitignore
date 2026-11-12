@@ -1,0 +1,15 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# 一次性截图、实验脚本和诊断材料统一放在这里
+/.tmp/
+__pycache__/

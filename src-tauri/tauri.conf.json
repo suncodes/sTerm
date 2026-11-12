@@ -1,0 +1,44 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "sTerm",
+  "mainBinaryName": "sTerm",
+  "version": "0.1.0",
+  "identifier": "io.github.suncodes.sterm",
+  "build": {
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "sTerm",
+        "width": 1100,
+        "height": 700,
+        "minWidth": 800,
+        "minHeight": 500,
+        "theme": "Dark",
+        "decorations": false,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "resources": {
+      "resources/conpty/conpty.dll": "conpty.dll",
+      "resources/conpty/OpenConsole.exe": "OpenConsole.exe",
+      "resources/conpty/LICENSE": "conpty-LICENSE.txt",
+      "../integrations/install.py": "agent-integration/install.py",
+      "../integrations/sterm-events.ts": "agent-integration/sterm-events.ts",
+      "../integrations/README.md": "agent-integration/README.md",
+      "../LICENSE": "LICENSE",
+      "../NOTICE": "NOTICE",
+      "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"
+    }
+  }
+}

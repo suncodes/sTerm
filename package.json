@@ -1,0 +1,38 @@
+{
+  "name": "sterm",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A lightweight Windows terminal for AI coding agents.",
+  "license": "Apache-2.0",
+  "author": "suncodes",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/suncodes/sTerm.git"
+  },
+  "bugs": {
+    "url": "https://github.com/suncodes/sTerm/issues"
+  },
+  "homepage": "https://github.com/suncodes/sTerm#readme",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "node --test scripts/test-agent-events.mjs scripts/test-agent-overlay.mjs && python scripts/test-agent-integration.py",
+    "tauri": "tauri",
+    "icon": "node scripts/gen-icon.mjs"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.1.1",
+    "@tauri-apps/plugin-clipboard-manager": "^2.2.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-search": "^0.15.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "@xterm/xterm": "^5.5.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}

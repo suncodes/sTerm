@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Validate release tag
+        shell: pwsh
+        run: |
+          $packageVersion = node -p "require('./package.json').version"
+          $tauriVersion = node -e "console.log(JSON.parse(require('fs').readFileSync('./src-tauri/tauri.conf.json', 'utf8')).version)"
+          $cargoMetadata = cargo metadata --no-deps --format-version 1 --manifest-path src-tauri/Cargo.toml | ConvertFrom-Json
+          $cargoVersion = $cargoMetadata.packages[0].version
+          if ($packageVersion -ne $tauriVersion -or $packageVersion -ne $cargoVersion) {
+            throw "Version mismatch: package=$packageVersion tauri=$tauriVersion cargo=$cargoVersion"
+          }
+          if ("v$packageVersion" -ne $env:GITHUB_REF_NAME) {
+            throw "Tag $env:GITHUB_REF_NAME does not match version $packageVersion"
+          }
+      - name: Install dependencies
+        run: npm ci
+      - name: Run tests
+        shell: pwsh
+        run: |
+          npm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --manifest-path src-tauri/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build NSIS installer
+        run: npm run tauri build
+      - name: Build portable archive
+        shell: pwsh
+        run: .\scripts\package.ps1
+      - name: Create checksums
+        shell: pwsh
+        run: |
+          $releaseDir = Join-Path $PWD "src-tauri/target/release"
+          $artifacts = Get-ChildItem -LiteralPath (Join-Path $releaseDir "bundle/nsis") -Filter "*-setup.exe" -File
+          $artifacts += Get-Item -LiteralPath (Join-Path $releaseDir "sTerm-portable.zip")
+          if ($artifacts.Count -lt 2) { throw "Expected an NSIS installer and portable ZIP" }
+          $lines = foreach ($artifact in $artifacts) {
+            $hash = Get-FileHash -LiteralPath $artifact.FullName -Algorithm SHA256
+            "{0} *{1}" -f $hash.Hash.ToLowerInvariant(), $artifact.Name
+          }
+          [System.IO.File]::WriteAllLines(
+            (Join-Path $releaseDir "SHA256SUMS.txt"),
+            [string[]]$lines,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/sTerm-portable.zip
+            src-tauri/target/release/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
