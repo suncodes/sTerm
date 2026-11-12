@@ -54,8 +54,10 @@ jobs:
         shell: pwsh
         run: |
           $releaseDir = Join-Path $PWD "src-tauri/target/release"
-          $artifacts = Get-ChildItem -LiteralPath (Join-Path $releaseDir "bundle/nsis") -Filter "*-setup.exe" -File
-          $artifacts += Get-Item -LiteralPath (Join-Path $releaseDir "sTerm-portable.zip")
+          $artifacts = @(
+            Get-ChildItem -LiteralPath (Join-Path $releaseDir "bundle/nsis") -Filter "*-setup.exe" -File
+            Get-Item -LiteralPath (Join-Path $releaseDir "sTerm-portable.zip")
+          )
           if ($artifacts.Count -lt 2) { throw "Expected an NSIS installer and portable ZIP" }
           $lines = foreach ($artifact in $artifacts) {
             $hash = Get-FileHash -LiteralPath $artifact.FullName -Algorithm SHA256
