@@ -4,11 +4,15 @@ All notable changes to sTerm are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-13
+
 ### Changed
 
 - Use package.json as the single version source and synchronize derived release metadata with a checked script.
 - Add a guarded one-command release script for versioning, validation, Git commit/tag, and atomic push.
 - Add four-edge docking for the Agent status overlay, with compact status-dot strips and persistent placement.
+- Keep the enabled Agent overlay visible with an explicit empty state when no Agent session is active.
+- Redesign integration settings with installation status for PowerShell and Pi, while identifying Claude Code and Codex as native integrations.
 
 ## [0.1.3] - 2026-11-13
 

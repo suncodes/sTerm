@@ -145,7 +145,8 @@ try {
         throw "未配置 origin 远程仓库。"
     }
 
-    $existingChanges = Get-WorkingTreeChanges
+    # PowerShell 会把单元素输出解包为字符串；强制保留数组，确保后续 .Count 可靠。
+    $existingChanges = @(Get-WorkingTreeChanges)
     $changeSummary = $existingChanges -join [Environment]::NewLine
     if ($existingChanges.Count -gt 0 -and -not $IncludeWorkingTree) {
         throw "工作区存在未提交改动。请先提交，或使用 -IncludeWorkingTree 显式将其纳入本次发布：$([Environment]::NewLine)$changeSummary"

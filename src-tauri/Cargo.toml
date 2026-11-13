@@ -1,6 +1,6 @@
 [package]
 name = "sterm"
-version = "0.1.3"
+version = "0.2.0"
 description = "sTerm - a lightweight local terminal for Windows"
 edition = "2021"
 license = "Apache-2.0"
