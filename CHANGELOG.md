@@ -2,6 +2,12 @@
 
 All notable changes to sTerm are documented in this file.
 
+## [0.1.3] - 2026-11-13
+
+### Fixed
+
+- Collect release artifacts as a PowerShell array before generating SHA-256 checksums.
+
 ## [0.1.1] - 2026-11-12
 
 ### Fixed

@@ -444,7 +444,7 @@ export function openSettings(cb: SettingsCallbacks): void {
     page.appendChild(verRow);
     void getVersion()
       .then((v) => (ver.textContent = v))
-      .catch(() => (ver.textContent = "0.1.1"));
+      .catch(() => (ver.textContent = "0.1.3"));
     return page;
   };
 
