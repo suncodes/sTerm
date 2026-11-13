@@ -61,6 +61,29 @@ npm run tauri build
 
 安装包输出位于 src-tauri/target/release/bundle/nsis/，便携包输出位于 src-tauri/target/release/。
 
+## 发布新版本
+
+package.json 是唯一需要人工指定版本号的来源。不要分别修改 Cargo、Tauri 或 lock 文件；使用下列命令会同步所有派生元数据，并在最后执行一致性校验：
+
+~~~powershell
+npm run version:set -- 0.1.4
+npm run version:check
+~~~
+
+完成代码和 CHANGELOG.md 后，先将它们提交，使工作区保持干净；随后一条命令即可同步版本、运行校验、创建提交与标签，并原子推送 `main` 和标签：
+
+~~~powershell
+npm run release -- 0.1.4
+~~~
+
+脚本会要求输入 `v0.1.4` 确认；非交互场景可显式附加 `-Approve`。如确认要把当前未提交改动全部纳入发布，才使用 `-IncludeWorkingTree`：
+
+~~~powershell
+npm run release -- 0.1.4 -IncludeWorkingTree -Approve
+~~~
+
+推送标签后，GitHub Actions 会校验标签与版本元数据，并构建安装包和便携包。脚本不会直接上传二进制文件。
+
 ## Agent 与 Shell 集成
 
 Claude Code 和 Codex 优先使用原生终端状态协议。sTerm 默认不会修改 PowerShell profile、Claude/Codex 配置或 Pi 配置。

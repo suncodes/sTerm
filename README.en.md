@@ -28,6 +28,29 @@ npm run tauri build
 
 Use .\scripts\package.ps1 to generate the portable ZIP after building.
 
+## Releasing a version
+
+package.json is the only version source that needs manual input. Do not edit Cargo, Tauri, or lock-file versions individually; the following command synchronizes derived metadata and then validates it:
+
+~~~powershell
+npm run version:set -- 0.1.4
+npm run version:check
+~~~
+
+After completing the code and CHANGELOG.md, commit them so the working tree is clean. One command then synchronizes the version, runs checks, creates the release commit and tag, and atomically pushes `main` and the tag:
+
+~~~powershell
+npm run release -- 0.1.4
+~~~
+
+The script asks you to type `v0.1.4` before it commits or pushes; use `-Approve` only for an explicitly approved non-interactive run. To intentionally include all current uncommitted changes, add `-IncludeWorkingTree`:
+
+~~~powershell
+npm run release -- 0.1.4 -IncludeWorkingTree -Approve
+~~~
+
+Pushing the tag makes GitHub Actions validate the tag and metadata, then build the installer and portable archive. The script does not upload binaries directly.
+
 ## Privacy and integrations
 
 sTerm has no telemetry or analytics endpoint by default and does not write terminal input or output to its diagnostic log. It does not modify PowerShell profiles or agent configuration automatically. Optional integrations are installed only from Settings → Integrations.

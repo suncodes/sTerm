@@ -16,9 +16,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "npm run version:check",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "node --test scripts/test-agent-events.mjs scripts/test-agent-overlay.mjs && python scripts/test-agent-integration.py",
+    "test": "node --test scripts/test-agent-events.mjs scripts/test-agent-overlay.mjs scripts/test-version.mjs && python scripts/test-agent-integration.py",
+    "version:set": "node scripts/version.mjs set",
+    "version:check": "node scripts/version.mjs check",
+    "release": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1",
     "tauri": "tauri",
     "icon": "node scripts/gen-icon.mjs"
   },

@@ -24,13 +24,9 @@ jobs:
       - name: Validate release tag
         shell: pwsh
         run: |
+          npm run version:check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $packageVersion = node -p "require('./package.json').version"
-          $tauriVersion = node -e "console.log(JSON.parse(require('fs').readFileSync('./src-tauri/tauri.conf.json', 'utf8')).version)"
-          $cargoMetadata = cargo metadata --no-deps --format-version 1 --manifest-path src-tauri/Cargo.toml | ConvertFrom-Json
-          $cargoVersion = $cargoMetadata.packages[0].version
-          if ($packageVersion -ne $tauriVersion -or $packageVersion -ne $cargoVersion) {
-            throw "Version mismatch: package=$packageVersion tauri=$tauriVersion cargo=$cargoVersion"
-          }
           if ("v$packageVersion" -ne $env:GITHUB_REF_NAME) {
             throw "Tag $env:GITHUB_REF_NAME does not match version $packageVersion"
           }

@@ -22,6 +22,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Install JavaScript dependencies
         run: npm ci
+      - name: Verify version metadata
+        run: npm run version:check
       - name: Verify frontend build
         run: npm run build
       - name: Run JavaScript tests

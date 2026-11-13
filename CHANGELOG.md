@@ -2,6 +2,13 @@
 
 All notable changes to sTerm are documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Use package.json as the single version source and synchronize derived release metadata with a checked script.
+- Add a guarded one-command release script for versioning, validation, Git commit/tag, and atomic push.
+
 ## [0.1.3] - 2026-11-13
 
 ### Fixed

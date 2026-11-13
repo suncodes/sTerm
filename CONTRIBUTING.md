@@ -17,6 +17,23 @@ cargo test --manifest-path .\src-tauri\Cargo.toml
 npm run tauri dev
 ~~~
 
+## 版本与发布
+
+package.json 是唯一人工维护的版本来源。需要发布新版本时，执行以下命令同步 package-lock.json、Cargo 元数据与 Tauri 配置；不要手工分别修改这些派生文件。
+
+~~~powershell
+npm run version:set -- 0.1.4
+npm run version:check
+~~~
+
+完成代码和 CHANGELOG.md 后，请先提交这些改动并保持工作区干净。随后用以下命令同步版本、运行检查、创建发布提交和标签，并原子推送 main 与标签：
+
+~~~powershell
+npm run release -- 0.1.4
+~~~
+
+脚本会在提交和推送前要求输入 `v0.1.4` 确认。只有需要将当前所有未提交改动纳入发布时，才显式使用 `-IncludeWorkingTree`。CI 与发布工作流仍会校验版本元数据；标签不一致时发布会失败。
+
 ## 提交 Pull Request
 
 1. 先查找已有 issue，说明问题、预期和最小复现方式。
