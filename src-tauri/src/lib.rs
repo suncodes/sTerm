@@ -104,6 +104,15 @@ struct ShellIntegrationStatus {
     installed: bool,
 }
 
+#[derive(Serialize)]
+struct AgentIntegrationStatus {
+    /// Claude Code 与 Codex 使用内置 OSC 7501 协议，不需要写入用户配置。
+    claude: &'static str,
+    codex: &'static str,
+    /// Pi 扩展的实际安装状态：installed / needs_update / not_installed / not_detected。
+    pi: &'static str,
+}
+
 fn shell_profile_path(shell_id: &str) -> Result<PathBuf, String> {
     if !matches!(shell_id, "powershell" | "pwsh") {
         return Err("当前默认 Shell 不支持 PowerShell 目录上报集成".into());
@@ -259,19 +268,85 @@ fn ws_move(app: AppHandle, state: tauri::State<AppState>, id: String, folder_id:
     Ok(())
 }
 
+const PI_EXTENSION: &str = r#"// sTerm agent 状态事件桥：pi 生命周期事件 → sTerm 事件信箱
+// 守卫：仅当由 sTerm 启动（STERM_TAB_ID 存在）时写入，其余环境零副作用
+import { appendFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+
+const tab = process.env.STERM_TAB_ID;
+const base = join(process.env.LOCALAPPDATA ?? "", "sTerm", "events");
+
+function write(kind: string) {
+  if (!tab) return;
+  try {
+    mkdirSync(base, { recursive: true });
+    appendFileSync(join(base, `${tab}.event`), `pi-${kind}\n`);
+  } catch {
+    // 写失败不影响 pi 本身
+  }
+}
+
+export default function (pi: { on: (ev: string, cb: () => void) => void }) {
+  pi.on("session_start", () => write("start"));
+  pi.on("agent_start", () => write("prompt"));
+  pi.on("agent_end", () => write("stop"));
+  pi.on("session_shutdown", () => write("end"));
+}
+"#;
+
+fn pi_agent_dir() -> Option<PathBuf> {
+    std::env::var_os("PI_CODING_AGENT_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("USERPROFILE").map(|profile| PathBuf::from(profile).join(".pi").join("agent")))
+}
+
+fn pi_extension_path(agent_dir: &Path) -> PathBuf {
+    agent_dir.join("extensions").join("sterm-events.ts")
+}
+
+fn pi_integration_status(agent_dir: Option<&Path>) -> Result<&'static str, String> {
+    let Some(agent_dir) = agent_dir else { return Ok("not_detected"); };
+    if !agent_dir.is_dir() {
+        return Ok("not_detected");
+    }
+    let path = pi_extension_path(agent_dir);
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok("not_installed"),
+        Err(error) => return Err(format!("读取 Pi 扩展 {} 失败：{error}", path.display())),
+    };
+    Ok(if contents == PI_EXTENSION { "installed" } else { "needs_update" })
+}
+
+fn agent_integration_status_impl() -> Result<AgentIntegrationStatus, String> {
+    let pi_dir = pi_agent_dir();
+    Ok(AgentIntegrationStatus {
+        claude: "native",
+        codex: "native",
+        pi: pi_integration_status(pi_dir.as_deref())?,
+    })
+}
+
+#[tauri::command]
+fn agent_integration_status() -> Result<AgentIntegrationStatus, String> {
+    agent_integration_status_impl()
+}
+
 /// 原生 Agent 不再安装状态 Hook，只清理旧版 sTerm 条目；Pi 继续使用扩展。
 /// 此函数仅由用户在设置页主动触发。
 fn install_agent_integration_impl(cli: &str) -> Result<(), String> {
+    if cli == "pi" {
+        return match pi_agent_dir() {
+            Some(dir) if dir.is_dir() => ensure_pi_extension(&dir),
+            _ => Ok(()),
+        };
+    }
+
     let profile = std::env::var("USERPROFILE").map_err(|_| "no USERPROFILE".to_string())?;
     let home = PathBuf::from(profile);
     let (env_name, default_dir, filename) = match cli {
         "claude" => ("CLAUDE_CONFIG_DIR", home.join(".claude"), "settings.json"),
         "codex" => ("CODEX_HOME", home.join(".codex"), "hooks.json"),
-        "pi" => {
-            let dir = std::env::var_os("PI_CODING_AGENT_DIR").map(PathBuf::from)
-                .unwrap_or_else(|| home.join(".pi").join("agent"));
-            return if dir.is_dir() { ensure_pi_extension(&dir) } else { Ok(()) };
-        }
         _ => return Err("unknown cli".into()),
     };
     let dir = std::env::var_os(env_name).map(PathBuf::from).unwrap_or(default_dir);
@@ -324,33 +399,7 @@ fn is_sterm_hook(hook: &serde_json::Value) -> bool {
 /// pi 扩展接入：写 ~/.pi/agent/extensions/sterm-events.ts
 /// 扩展在 pi 进程内订阅生命周期事件并写入事件信箱（与 shell hook 同格式），全局目录免审批自动加载
 fn ensure_pi_extension(agent_dir: &Path) -> Result<(), String> {
-    const EXT: &str = r#"// sTerm agent 状态事件桥：pi 生命周期事件 → sTerm 事件信箱
-// 守卫：仅当由 sTerm 启动（STERM_TAB_ID 存在）时写入，其余环境零副作用
-import { appendFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
-
-const tab = process.env.STERM_TAB_ID;
-const base = join(process.env.LOCALAPPDATA ?? "", "sTerm", "events");
-
-function write(kind: string) {
-  if (!tab) return;
-  try {
-    mkdirSync(base, { recursive: true });
-    appendFileSync(join(base, `${tab}.event`), `pi-${kind}\n`);
-  } catch {
-    // 写失败不影响 pi 本身
-  }
-}
-
-export default function (pi: { on: (ev: string, cb: () => void) => void }) {
-  pi.on("session_start", () => write("start"));
-  pi.on("agent_start", () => write("prompt"));
-  pi.on("agent_end", () => write("stop"));
-  pi.on("session_shutdown", () => write("end"));
-}
-"#;
-    let path = agent_dir.join("extensions").join("sterm-events.ts");
-    storage::write_if_changed(&path, EXT, true)
+    storage::write_if_changed(&pi_extension_path(agent_dir), PI_EXTENSION, true)
 }
 
 #[tauri::command]
@@ -492,6 +541,8 @@ pub fn run() {
             overlay::overlay_publish,
             overlay::overlay_ready,
             overlay::overlay_save_position,
+            overlay::overlay_expand,
+            overlay::overlay_collapse,
             overlay::overlay_activate,
             list_shells,
             pty_spawn,
@@ -502,6 +553,7 @@ pub fn run() {
             shell_integration_status,
             install_shell_integration,
             remove_shell_integration,
+            agent_integration_status,
             store_list,
             ws_add,
             ws_rename,
@@ -608,6 +660,24 @@ mod tests {
         cleanup_agent_hooks(&path).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
         assert!(!dir.path().join("settings.json.bak").exists());
+    }
+
+    #[test]
+    fn pi_integration_status_distinguishes_missing_current_and_outdated_extensions() {
+        let dir = TempDir::new();
+        let agent_dir = dir.path().join("agent");
+        assert_eq!(pi_integration_status(Some(&agent_dir)).unwrap(), "not_detected");
+
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        assert_eq!(pi_integration_status(Some(&agent_dir)).unwrap(), "not_installed");
+
+        let extension = pi_extension_path(&agent_dir);
+        std::fs::create_dir_all(extension.parent().unwrap()).unwrap();
+        std::fs::write(&extension, "// older sTerm extension").unwrap();
+        assert_eq!(pi_integration_status(Some(&agent_dir)).unwrap(), "needs_update");
+
+        std::fs::write(&extension, PI_EXTENSION).unwrap();
+        assert_eq!(pi_integration_status(Some(&agent_dir)).unwrap(), "installed");
     }
 
     #[test]

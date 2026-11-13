@@ -1181,8 +1181,65 @@ body.resizing * { pointer-events: none; }
   line-height: 1.6;
 }
 .settings-reset { margin-top: 18px; }
-.settings-integration-section { margin-top: 24px; }
-.settings-integration-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.settings-integration-section { margin-top: 26px; }
+.settings-integration-description {
+  color: var(--fg-dim);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.settings-integration-status,
+.settings-integration-agent {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-integration-status { margin-top: 8px; }
+.settings-integration-status-label,
+.settings-integration-agent-name {
+  color: var(--fg-2);
+  font-size: 12px;
+}
+.settings-integration-status-list { margin-top: 8px; border-top: 1px solid var(--border); }
+.settings-integration-state {
+  min-width: 0;
+  color: var(--fg-dim);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: right;
+}
+.settings-integration-state.ready { color: var(--green); }
+.settings-integration-state.warning { color: var(--yellow); }
+.settings-integration-state.error { color: #ffb4a9; }
+.settings-integration-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.settings-integration-btn {
+  min-height: 32px;
+  padding: 7px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid #55555e;
+  border-radius: var(--radius);
+  color: #e8e8ec;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color .16s ease, border-color .16s ease;
+}
+.settings-integration-btn:hover { background: rgba(255, 255, 255, 0.08); border-color: #9a9aa4; }
+.settings-integration-btn:active { background: rgba(255, 255, 255, 0.12); }
+.settings-integration-btn:disabled { opacity: .45; cursor: default; }
+.settings-integration-btn:focus-visible { outline: 2px solid #a9baff; outline-offset: 3px; }
+.settings-integration-agent-btn { margin-top: 12px; }
+.settings-integration-result {
+  margin-top: 10px;
+  color: var(--fg-dim);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.settings-integration-result:empty { display: none; }
+.settings-integration-result-error { color: #ffb4a9; }
 
 /* ================= Agent 状态点 ================= */
 .tab-state {

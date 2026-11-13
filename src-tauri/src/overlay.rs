@@ -8,6 +8,18 @@ use crate::{diagnostics, storage};
 
 const LABEL: &str = "agent-overlay";
 const WIDTH: f64 = 264.0;
+const SNAP_DISTANCE: f64 = 24.0;
+const EXPOSED_SIZE: f64 = 16.0;
+const COLLAPSED_THICKNESS: f64 = 28.0;
+const COLLAPSED_SLOT: f64 = 22.0;
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum DockEdge { Left, Right, Top, Bottom }
+
+impl DockEdge {
+    fn is_vertical(self) -> bool { matches!(self, Self::Left | Self::Right) }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
@@ -15,11 +27,19 @@ struct Preferences {
     enabled: bool,
     position: Option<SavedPosition>,
     background_opacity: u8,
+    dock: Option<DockEdge>,
+    collapsed: bool,
 }
 
 impl Default for Preferences {
     fn default() -> Self {
-        Self { enabled: false, position: None, background_opacity: 80 }
+        Self {
+            enabled: false,
+            position: None,
+            background_opacity: 80,
+            dock: None,
+            collapsed: false,
+        }
     }
 }
 
@@ -50,6 +70,8 @@ pub struct Session {
 pub struct Snapshot {
     enabled: bool,
     background_opacity: u8,
+    dock: Option<DockEdge>,
+    collapsed: bool,
     revision: u64,
     sessions: Vec<Session>,
 }
@@ -85,6 +107,9 @@ impl OverlayState {
         Ok(Snapshot {
             enabled: inner.prefs.enabled,
             background_opacity: inner.prefs.background_opacity.min(100),
+            dock: inner.prefs.dock,
+            // 没有状态点时不能只保留边缘细条，否则“暂无 Agent 会话”不可见。
+            collapsed: uses_collapsed_layout(&inner.prefs, inner.sessions.len()),
             revision: inner.revision,
             sessions: inner.sessions.clone(),
         })
@@ -98,16 +123,55 @@ impl OverlayState {
         inner.revision += 1;
         Ok(())
     }
+
+    fn update_preferences_if_changed(&self, change: impl FnOnce(&mut Preferences)) -> Result<bool, String> {
+        let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
+        let (prefs, wrote) = save_preferences_if_changed(&self.file, change)?;
+        if !wrote && inner.prefs == prefs {
+            return Ok(false);
+        }
+        inner.prefs = prefs;
+        inner.revision += 1;
+        Ok(true)
+    }
 }
 
 fn save_preferences(file: &Path, change: impl FnOnce(&mut Preferences)) -> Result<Preferences, String> {
     let _lock = storage::lock(file)?;
     let mut prefs = storage::read_json::<Preferences>(file)?.unwrap_or_default();
     change(&mut prefs);
-    prefs.background_opacity = prefs.background_opacity.min(100);
+    normalize_preferences(&mut prefs);
     let bytes = serde_json::to_vec_pretty(&prefs).map_err(|e| e.to_string())?;
     storage::write(file, &bytes, true)?;
     Ok(prefs)
+}
+
+fn normalize_preferences(prefs: &mut Preferences) {
+    prefs.background_opacity = prefs.background_opacity.min(100);
+    if prefs.dock.is_none() {
+        prefs.collapsed = false;
+    }
+}
+
+fn uses_collapsed_layout(prefs: &Preferences, session_count: usize) -> bool {
+    prefs.collapsed && prefs.dock.is_some() && session_count > 0
+}
+
+fn save_preferences_if_changed(
+    file: &Path,
+    change: impl FnOnce(&mut Preferences),
+) -> Result<(Preferences, bool), String> {
+    let _lock = storage::lock(file)?;
+    let mut prefs = storage::read_json::<Preferences>(file)?.unwrap_or_default();
+    let before = prefs.clone();
+    change(&mut prefs);
+    normalize_preferences(&mut prefs);
+    if prefs == before {
+        return Ok((prefs, false));
+    }
+    let bytes = serde_json::to_vec_pretty(&prefs).map_err(|e| e.to_string())?;
+    storage::write(file, &bytes, true)?;
+    Ok((prefs, true))
 }
 
 fn require_window(window: &WebviewWindow, labels: &[&str]) -> Result<(), String> {
@@ -139,25 +203,153 @@ fn height(session_count: usize) -> f64 {
     46.0 + session_count.clamp(1, 6) as f64 * 32.0
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct WorkArea { x: i32, y: i32, width: u32, height: u32 }
+
+impl WorkArea {
+    fn right(self) -> i64 { i64::from(self.x) + i64::from(self.width) }
+    fn bottom(self) -> i64 { i64::from(self.y) + i64::from(self.height) }
+}
+
+fn pixels(value: f64, scale: f64) -> u32 {
+    (value * scale).round().max(1.0) as u32
+}
+
+fn clamp_position(position: SavedPosition, size: PhysicalSize<u32>, area: WorkArea) -> SavedPosition {
+    let max_x = area.right() - i64::from(size.width);
+    let max_y = area.bottom() - i64::from(size.height);
+    SavedPosition {
+        x: i64::from(position.x).clamp(i64::from(area.x), max_x.max(i64::from(area.x))) as i32,
+        y: i64::from(position.y).clamp(i64::from(area.y), max_y.max(i64::from(area.y))) as i32,
+    }
+}
+
+fn default_position(area: WorkArea, size: PhysicalSize<u32>) -> SavedPosition {
+    clamp_position(SavedPosition {
+        x: (area.right() - i64::from(size.width) - 20) as i32,
+        y: area.y.saturating_add(60),
+    }, size, area)
+}
+
+fn nearest_area(position: SavedPosition, size: PhysicalSize<u32>, areas: &[WorkArea]) -> Option<(WorkArea, SavedPosition)> {
+    areas.iter().copied().map(|area| {
+        let fitted = clamp_position(position, size, area);
+        let dx = i64::from(fitted.x) - i64::from(position.x);
+        let dy = i64::from(fitted.y) - i64::from(position.y);
+        (i128::from(dx) * i128::from(dx) + i128::from(dy) * i128::from(dy), area, fitted)
+    }).min_by_key(|(distance, _, _)| *distance)
+        .map(|(_, area, fitted)| (area, fitted))
+}
 
 /// 保留多屏负坐标，屏幕移除后放回最近的可用工作区。
 fn fit_position(position: Option<SavedPosition>, size: PhysicalSize<u32>, areas: &[WorkArea]) -> Option<SavedPosition> {
     let first = areas.first()?;
-    let desired = position.unwrap_or(SavedPosition {
-        x: (i64::from(first.x) + i64::from(first.width) - i64::from(size.width) - 20) as i32,
-        y: first.y.saturating_add(60),
-    });
-    areas.iter().map(|area| {
-        let max_x = i64::from(area.x) + i64::from(area.width.saturating_sub(size.width));
-        let max_y = i64::from(area.y) + i64::from(area.height.saturating_sub(size.height));
-        let x = i64::from(desired.x).clamp(i64::from(area.x), max_x);
-        let y = i64::from(desired.y).clamp(i64::from(area.y), max_y);
-        let dx = x - i64::from(desired.x);
-        let dy = y - i64::from(desired.y);
-        (i128::from(dx) * i128::from(dx) + i128::from(dy) * i128::from(dy), SavedPosition { x: x as i32, y: y as i32 })
-    }).min_by_key(|(distance, _)| *distance).map(|(_, position)| position)
+    let desired = position.unwrap_or_else(|| default_position(*first, size));
+    nearest_area(desired, size, areas).map(|(_, fitted)| fitted)
+}
+
+fn collapsed_size(edge: DockEdge, session_count: usize, scale: f64, area: WorkArea) -> PhysicalSize<u32> {
+    let thickness = pixels(COLLAPSED_THICKNESS, scale);
+    let length = pixels((COLLAPSED_SLOT * session_count.max(1) as f64).max(COLLAPSED_THICKNESS), scale);
+    let (width, height) = if edge.is_vertical() {
+        (thickness, length)
+    } else {
+        (length, thickness)
+    };
+    PhysicalSize::new(width.min(area.width.max(1)), height.min(area.height.max(1)))
+}
+
+fn expanded_size(session_count: usize, scale: f64, area: WorkArea) -> PhysicalSize<u32> {
+    PhysicalSize::new(
+        pixels(WIDTH, scale).min(area.width.max(1)),
+        pixels(height(session_count), scale).min(area.height.max(1)),
+    )
+}
+
+fn docked_position(
+    edge: DockEdge,
+    collapsed: bool,
+    position: SavedPosition,
+    size: PhysicalSize<u32>,
+    area: WorkArea,
+    exposed: u32,
+) -> SavedPosition {
+    let exposed = i64::from(exposed.min(if edge.is_vertical() { size.width } else { size.height }));
+    let hidden_width = i64::from(size.width).saturating_sub(exposed);
+    let hidden_height = i64::from(size.height).saturating_sub(exposed);
+    let fitted = clamp_position(position, size, area);
+    match edge {
+        DockEdge::Left => SavedPosition {
+            x: if collapsed { (i64::from(area.x) - hidden_width) as i32 } else { area.x },
+            y: fitted.y,
+        },
+        DockEdge::Right => SavedPosition {
+            x: if collapsed { (area.right() - exposed) as i32 } else { (area.right() - i64::from(size.width)) as i32 },
+            y: fitted.y,
+        },
+        DockEdge::Top => SavedPosition {
+            x: fitted.x,
+            y: if collapsed { (i64::from(area.y) - hidden_height) as i32 } else { area.y },
+        },
+        DockEdge::Bottom => SavedPosition {
+            x: fitted.x,
+            y: if collapsed { (area.bottom() - exposed) as i32 } else { (area.bottom() - i64::from(size.height)) as i32 },
+        },
+    }
+}
+
+fn distance_to_edge(start: i64, end: i64, edge: i64) -> i64 {
+    if start <= edge && edge <= end {
+        0
+    } else {
+        (start - edge).abs().min((end - edge).abs())
+    }
+}
+
+fn nearby_dock_edge(
+    position: SavedPosition,
+    size: PhysicalSize<u32>,
+    areas: &[WorkArea],
+    threshold: u32,
+) -> Option<(DockEdge, WorkArea)> {
+    let left = i64::from(position.x);
+    let top = i64::from(position.y);
+    let right = left + i64::from(size.width);
+    let bottom = top + i64::from(size.height);
+    areas.iter().copied().flat_map(|area| {
+        let overlaps_x = right > i64::from(area.x) && left < area.right();
+        let overlaps_y = bottom > i64::from(area.y) && top < area.bottom();
+        [
+            (overlaps_y, distance_to_edge(left, right, i64::from(area.x)), DockEdge::Left),
+            (overlaps_y, distance_to_edge(left, right, area.right()), DockEdge::Right),
+            (overlaps_x, distance_to_edge(top, bottom, i64::from(area.y)), DockEdge::Top),
+            (overlaps_x, distance_to_edge(top, bottom, area.bottom()), DockEdge::Bottom),
+        ].into_iter().filter_map(move |(overlaps, distance, edge)| {
+            overlaps.then_some((distance, edge, area))
+        })
+    }).filter(|(distance, _, _)| *distance <= i64::from(threshold))
+        .min_by_key(|(distance, edge, _)| {
+            let order = match edge {
+                DockEdge::Left => 0_u8,
+                DockEdge::Right => 1,
+                DockEdge::Top => 2,
+                DockEdge::Bottom => 3,
+            };
+            (*distance, order)
+        }).map(|(_, edge, area)| (edge, area))
+}
+
+fn work_areas(window: &WebviewWindow) -> Result<Vec<WorkArea>, String> {
+    let mut monitors = window.available_monitors().map_err(|e| e.to_string())?;
+    if let Some(primary) = window.primary_monitor().map_err(|e| e.to_string())? {
+        if let Some(index) = monitors.iter().position(|monitor| monitor.position() == primary.position()) {
+            monitors.swap(0, index);
+        }
+    }
+    Ok(monitors.iter().map(|monitor| {
+        let rect = monitor.work_area();
+        WorkArea { x: rect.position.x, y: rect.position.y, width: rect.size.width, height: rect.size.height }
+    }).collect())
 }
 
 fn resize_and_place(app: &AppHandle, restore: bool) -> Result<(), String> {
@@ -165,34 +357,102 @@ fn resize_and_place(app: &AppHandle, restore: bool) -> Result<(), String> {
     let state = app.state::<OverlayState>();
     let snapshot = state.snapshot()?;
     let scale = window.scale_factor().map_err(|e| e.to_string())?;
-    let mut monitors = window.available_monitors().map_err(|e| e.to_string())?;
-    if let Some(primary) = window.primary_monitor().map_err(|e| e.to_string())? {
-        if let Some(index) = monitors.iter().position(|m| m.position() == primary.position()) {
-            monitors.swap(0, index);
-        }
-    }
-    let areas: Vec<_> = monitors.iter().map(|monitor| {
-        let rect = monitor.work_area();
-        WorkArea { x: rect.position.x, y: rect.position.y, width: rect.size.width, height: rect.size.height }
-    }).collect();
-    let max_height = areas.iter().map(|a| a.height).min().unwrap_or(u32::MAX);
-    let size = PhysicalSize::new((WIDTH * scale).round() as u32, ((height(snapshot.sessions.len()) * scale).round() as u32).min(max_height));
-    if window.inner_size().map_err(|e| e.to_string())? != size {
-        window.set_size(size).map_err(|e| e.to_string())?;
-    }
+    let areas = work_areas(&window)?;
+    let first = areas.first().copied().ok_or("未找到可用显示器")?;
+    let prefs = state.inner.lock().map_err(|e| e.to_string())?.prefs.clone();
+    let initial_size = expanded_size(snapshot.sessions.len(), scale, first);
     let position = if restore {
-        state.inner.lock().map_err(|e| e.to_string())?.prefs.position
+        prefs.position
     } else {
         let pos = window.outer_position().map_err(|e| e.to_string())?;
         Some(SavedPosition { x: pos.x, y: pos.y })
+    }.unwrap_or_else(|| default_position(first, initial_size));
+    let (area, _) = nearest_area(position, initial_size, &areas).ok_or("未找到可用显示器")?;
+    let collapsed = snapshot.collapsed;
+    let size = match (prefs.dock, collapsed) {
+        (Some(edge), true) => collapsed_size(edge, snapshot.sessions.len(), scale, area),
+        _ => expanded_size(snapshot.sessions.len(), scale, area),
     };
-    if let Some(pos) = fit_position(position, size, &areas) {
-        let target = PhysicalPosition::new(pos.x, pos.y);
-        if window.outer_position().map_err(|e| e.to_string())? != target {
-            window.set_position(target).map_err(|e| e.to_string())?;
-        }
+    if window.inner_size().map_err(|e| e.to_string())? != size {
+        window.set_size(size).map_err(|e| e.to_string())?;
+    }
+    let target = match prefs.dock {
+        Some(edge) => docked_position(edge, collapsed, position, size, area, pixels(EXPOSED_SIZE, scale)),
+        None => clamp_position(position, size, area),
+    };
+    let target = PhysicalPosition::new(target.x, target.y);
+    if window.outer_position().map_err(|e| e.to_string())? != target {
+        window.set_position(target).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+fn should_show(snapshot: &Snapshot) -> bool {
+    // 空列表也是有效状态：让用户能确认开关已生效，并看到“暂无 Agent 会话”。
+    snapshot.enabled
+}
+
+fn save_drag_position(app: &AppHandle) -> Result<Snapshot, String> {
+    let Some(window) = app.get_webview_window(LABEL) else {
+        return app.state::<OverlayState>().snapshot();
+    };
+    let state = app.state::<OverlayState>();
+    let snapshot = state.snapshot()?;
+    if !snapshot.enabled {
+        return Ok(snapshot);
+    }
+
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let position = window.outer_position().map_err(|e| e.to_string())?;
+    let position = SavedPosition { x: position.x, y: position.y };
+    let size = window.inner_size().map_err(|e| e.to_string())?;
+    let areas = work_areas(&window)?;
+    let (dock, collapsed, saved_position) = if let Some((edge, area)) =
+        nearby_dock_edge(position, size, &areas, pixels(SNAP_DISTANCE, scale))
+    {
+        let expanded = expanded_size(snapshot.sessions.len(), scale, area);
+        let anchor = docked_position(edge, false, position, expanded, area, pixels(EXPOSED_SIZE, scale));
+        (Some(edge), true, anchor)
+    } else {
+        (None, false, fit_position(Some(position), size, &areas).unwrap_or(position))
+    };
+    let changed = state.update_preferences_if_changed(|prefs| {
+        prefs.position = Some(saved_position);
+        prefs.dock = dock;
+        prefs.collapsed = collapsed;
+    })?;
+    resize_and_place(app, true)?;
+    if changed { emit_snapshot(app) } else { state.snapshot() }
+}
+
+fn expand_dock(app: &AppHandle) -> Result<Snapshot, String> {
+    let state = app.state::<OverlayState>();
+    let changed = state.update_preferences_if_changed(|prefs| {
+        if prefs.dock.is_some() {
+            prefs.collapsed = false;
+        }
+    })?;
+    if !changed {
+        return state.snapshot();
+    }
+
+    resize_and_place(app, true)?;
+    emit_snapshot(app)
+}
+
+fn collapse_dock(app: &AppHandle) -> Result<Snapshot, String> {
+    let state = app.state::<OverlayState>();
+    let changed = state.update_preferences_if_changed(|prefs| {
+        if prefs.dock.is_some() {
+            prefs.collapsed = true;
+        }
+    })?;
+    if !changed {
+        return state.snapshot();
+    }
+
+    resize_and_place(app, true)?;
+    emit_snapshot(app)
 }
 
 fn create_window(app: &AppHandle) -> Result<(), String> {
@@ -457,8 +717,9 @@ mod native {
 fn set_enabled(app: &AppHandle, enabled: bool) -> Result<Snapshot, String> {
     if enabled { create_window(app)?; }
     let state = app.state::<OverlayState>();
-    let previous = state.snapshot()?.enabled;
-    let position = if !enabled && previous {
+    let previous_prefs = state.inner.lock().map_err(|e| e.to_string())?.prefs.clone();
+    let previous = previous_prefs.enabled;
+    let position = if !enabled && previous && previous_prefs.dock.is_none() {
         app.get_webview_window(LABEL).and_then(|window| window.outer_position().ok())
             .map(|pos| SavedPosition { x: pos.x, y: pos.y })
     } else { None };
@@ -471,7 +732,7 @@ fn set_enabled(app: &AppHandle, enabled: bool) -> Result<Snapshot, String> {
             if enabled {
                 resize_and_place(app, true)?;
                 if state.inner.lock().map_err(|e| e.to_string())?.ready {
-                    native::visible(&window, true)?;
+                    native::visible(&window, should_show(&state.snapshot()?))?;
                 }
             } else {
                 native::visible(&window, false)?;
@@ -480,7 +741,7 @@ fn set_enabled(app: &AppHandle, enabled: bool) -> Result<Snapshot, String> {
         Ok(())
     })();
     if let Err(error) = result {
-        let _ = state.update_preferences(|prefs| prefs.enabled = previous);
+        let _ = state.update_preferences(|prefs| *prefs = previous_prefs);
         let _ = emit_snapshot(app);
         return Err(error);
     }
@@ -531,7 +792,14 @@ pub async fn overlay_publish(app: AppHandle, window: WebviewWindow, sessions: Ve
             inner.sessions = sessions;
             inner.revision += 1;
         }
-        if state.snapshot()?.enabled { resize_and_place(app, false)?; }
+        let snapshot = state.snapshot()?;
+        if snapshot.enabled {
+            resize_and_place(app, snapshot.dock.is_some())?;
+            if state.inner.lock().map_err(|e| e.to_string())?.ready {
+                let window = app.get_webview_window(LABEL).ok_or("悬浮窗已关闭")?;
+                native::visible(&window, should_show(&snapshot))?;
+            }
+        }
         emit_snapshot(app)?;
         Ok(())
     }).await
@@ -544,27 +812,30 @@ pub async fn overlay_ready(app: AppHandle, window: WebviewWindow) -> Result<Snap
         let state = app.state::<OverlayState>();
         state.inner.lock().map_err(|e| e.to_string())?.ready = true;
         resize_and_place(app, true)?;
-        if state.snapshot()?.enabled {
-            native::visible(&app.get_webview_window(LABEL).ok_or("悬浮窗已关闭")?, true)?;
+        let snapshot = state.snapshot()?;
+        if snapshot.enabled {
+            native::visible(&app.get_webview_window(LABEL).ok_or("悬浮窗已关闭")?, should_show(&snapshot))?;
         }
-        state.snapshot()
+        Ok(snapshot)
     }).await
 }
 
 #[tauri::command]
-pub async fn overlay_save_position(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
+pub async fn overlay_save_position(app: AppHandle, window: WebviewWindow) -> Result<Snapshot, String> {
     require_window(&window, &[LABEL])?;
-    on_ui(app, |app| {
-        let Some(window) = app.get_webview_window(LABEL) else { return Ok(()); };
-        let state = app.state::<OverlayState>();
-        if !state.snapshot()?.enabled { return Ok(()); }
-        let pos = window.outer_position().map_err(|e| e.to_string())?;
-        let position = Some(SavedPosition { x: pos.x, y: pos.y });
-        if state.inner.lock().map_err(|e| e.to_string())?.prefs.position != position {
-            state.update_preferences(|prefs| prefs.position = position)?;
-        }
-        Ok(())
-    }).await
+    on_ui(app, |app| save_drag_position(app)).await
+}
+
+#[tauri::command]
+pub async fn overlay_expand(app: AppHandle, window: WebviewWindow) -> Result<Snapshot, String> {
+    require_window(&window, &[LABEL])?;
+    on_ui(app, |app| expand_dock(app)).await
+}
+
+#[tauri::command]
+pub async fn overlay_collapse(app: AppHandle, window: WebviewWindow) -> Result<Snapshot, String> {
+    require_window(&window, &[LABEL])?;
+    on_ui(app, |app| collapse_dock(app)).await
 }
 
 #[tauri::command]
@@ -612,6 +883,72 @@ mod tests {
     }
 
     #[test]
+    fn enabled_overlay_stays_visible_without_agent_sessions() {
+        let mut snapshot = Snapshot {
+            enabled: true,
+            background_opacity: 80,
+            dock: None,
+            collapsed: false,
+            revision: 0,
+            sessions: Vec::new(),
+        };
+        assert!(should_show(&snapshot));
+        snapshot.enabled = false;
+        assert!(!should_show(&snapshot));
+
+        let prefs = Preferences {
+            enabled: true,
+            position: None,
+            background_opacity: 80,
+            dock: Some(DockEdge::Right),
+            collapsed: true,
+        };
+        assert!(!uses_collapsed_layout(&prefs, 0));
+        assert!(uses_collapsed_layout(&prefs, 1));
+    }
+
+    #[test]
+    fn edge_docking_exposes_only_the_status_strip_on_all_four_sides() {
+        let area = WorkArea { x: -1920, y: -100, width: 1920, height: 1080 };
+        let expanded = PhysicalSize::new(264, 110);
+        let cases = [
+            (SavedPosition { x: -1918, y: 220 }, DockEdge::Left),
+            (SavedPosition { x: -266, y: 220 }, DockEdge::Right),
+            (SavedPosition { x: -800, y: -98 }, DockEdge::Top),
+            (SavedPosition { x: -800, y: 868 }, DockEdge::Bottom),
+        ];
+
+        for (position, edge) in cases {
+            assert_eq!(nearby_dock_edge(position, expanded, &[area], 24), Some((edge, area)));
+            let anchor = docked_position(edge, false, position, expanded, area, 16);
+            let compact = collapsed_size(edge, 2, 1.0, area);
+            let position = docked_position(edge, true, anchor, compact, area, 16);
+            match edge {
+                DockEdge::Left => assert_eq!(i64::from(position.x) + i64::from(compact.width), i64::from(area.x) + 16),
+                DockEdge::Right => assert_eq!(position.x, (area.right() - 16) as i32),
+                DockEdge::Top => assert_eq!(i64::from(position.y) + i64::from(compact.height), i64::from(area.y) + 16),
+                DockEdge::Bottom => assert_eq!(position.y, (area.bottom() - 16) as i32),
+            }
+        }
+        assert_eq!(collapsed_size(DockEdge::Left, 1, 1.0, area), PhysicalSize::new(28, 28));
+        assert_eq!(collapsed_size(DockEdge::Top, 3, 1.0, area), PhysicalSize::new(66, 28));
+        assert_eq!(pixels(EXPOSED_SIZE, 1.5), 24);
+    }
+
+    #[test]
+    fn docking_uses_one_nearest_edge_and_ignores_positions_away_from_edges() {
+        let area = WorkArea { x: 0, y: 0, width: 1000, height: 800 };
+        let size = PhysicalSize::new(264, 110);
+        // 角落不引入独立模式；等距时用稳定顺序选择一条边。
+        assert_eq!(nearby_dock_edge(SavedPosition { x: 2, y: 2 }, size, &[area], 24),
+            Some((DockEdge::Left, area)));
+        // 拖动时允许短暂越过边界，松开后仍应回吸到边缘。
+        assert_eq!(nearby_dock_edge(SavedPosition { x: -100, y: 300 }, size, &[area], 24),
+            Some((DockEdge::Left, area)));
+        assert_eq!(nearby_dock_edge(SavedPosition { x: 300, y: 300 }, size, &[area], 24), None);
+    }
+
+    #[test]
     fn preferences_default_off_and_independent_edits_keep_position() {
         let dir = TempDir::new();
         let file = dir.path().join("overlay.json");
@@ -619,12 +956,35 @@ mod tests {
         save_preferences(&file, |p| p.enabled = true).unwrap();
         let position = Some(SavedPosition { x: -1500, y: 300 });
         save_preferences(&file, |p| p.position = position).unwrap();
+        save_preferences(&file, |p| {
+            p.dock = Some(DockEdge::Left);
+            p.collapsed = true;
+        }).unwrap();
         save_preferences(&file, |p| p.background_opacity = 35).unwrap();
         let prefs = save_preferences(&file, |p| p.enabled = false).unwrap();
         assert_eq!(prefs.background_opacity, 35);
         assert!(!prefs.enabled);
         assert_eq!(prefs.position, position);
+        assert_eq!(prefs.dock, Some(DockEdge::Left));
+        assert!(prefs.collapsed);
         assert_eq!(storage::read_json::<Preferences>(&file).unwrap(), Some(prefs));
+    }
+
+    #[test]
+    fn unchanged_dock_preferences_do_not_create_a_backup() {
+        let dir = TempDir::new();
+        let file = dir.path().join("overlay.json");
+        let saved = save_preferences(&file, |p| {
+            p.enabled = true;
+            p.dock = Some(DockEdge::Right);
+        }).unwrap();
+        let (unchanged, wrote) = save_preferences_if_changed(&file, |p| {
+            p.enabled = true;
+            p.dock = Some(DockEdge::Right);
+        }).unwrap();
+        assert!(!wrote);
+        assert_eq!(unchanged, saved);
+        assert!(!file.with_file_name("overlay.json.bak").exists());
     }
 
     #[test]
@@ -634,6 +994,8 @@ mod tests {
         std::fs::write(&file, br#"{"enabled":true,"position":{"x":-1500,"y":300}}"#).unwrap();
         let legacy = storage::read_json::<Preferences>(&file).unwrap().unwrap();
         assert_eq!(legacy.background_opacity, 80);
+        assert_eq!(legacy.dock, None);
+        assert!(!legacy.collapsed);
         let updated = save_preferences(&file, |p| p.background_opacity = 0).unwrap();
         assert!(updated.enabled);
         assert_eq!(updated.position, legacy.position);

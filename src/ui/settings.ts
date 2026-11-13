@@ -69,6 +69,14 @@ interface ShellIntegrationStatus {
   installed: boolean;
 }
 
+type PiIntegrationState = "installed" | "needs_update" | "not_installed" | "not_detected";
+
+interface AgentIntegrationStatus {
+  claude: "native";
+  codex: "native";
+  pi: PiIntegrationState;
+}
+
 /* ---------- 小工具 ---------- */
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -201,9 +209,9 @@ export function openSettings(cb: SettingsCallbacks): void {
     row.append(copy, input);
     page.appendChild(row);
     page.appendChild(el("div", "settings-hint",
-      "主窗口最小化后继续显示。拖动小窗顶部可移动，位置自动保存；点击会话返回对应标签。关闭小窗不会结束会话，退出 sTerm 后小窗同时关闭。"));
+      "主窗口最小化后继续显示。拖动小窗顶部可移动，位置自动保存；拖至任一屏幕边缘会吸附并收起为状态点，点击状态点恢复展开。关闭小窗不会结束会话，退出 sTerm 后小窗同时关闭。"));
     page.appendChild(el("div", "settings-hint",
-      "显示本应用内已识别的 Agent 会话，状态与标签栏一致。首次开启默认位于主屏右上方。"));
+      "开启后始终显示小窗；已识别的 Agent 会话状态与标签栏一致，暂未识别时显示“暂无 Agent 会话”。首次开启默认位于主屏右上方。"));
     page.appendChild(el("div", "settings-section settings-overlay-appearance", "外观"));
     const opacityRow = el("div", "settings-row settings-opacity-row");
     const opacityLabel = el("label", "settings-label", "底色透明度");
@@ -327,95 +335,161 @@ export function openSettings(cb: SettingsCallbacks): void {
   const renderIntegrations = (): HTMLElement => {
     const page = el("div");
     page.appendChild(el("div", "settings-section", "PowerShell 目录上报"));
-    page.appendChild(el("div", "settings-hint",
+    page.appendChild(el("div", "settings-integration-description",
       "可选。安装后会在当前 PowerShell 的 $PROFILE 中加入一小段 OSC 7 代码，用于更准确地识别终端当前目录；其他 profile 内容保持不变。"));
 
-    const shellStatus = el("div", "settings-hint");
+    const shellStatus = el("div", "settings-integration-status");
+    shellStatus.appendChild(el("span", "settings-integration-status-label", "状态"));
+    const shellState = el("span", "settings-integration-state", "检查中…");
+    shellStatus.appendChild(shellState);
     const shellActions = el("div", "settings-integration-actions");
-    const installShell = el("button", "dialog-btn accent", "安装 PowerShell 集成");
-    const removeShell = el("button", "dialog-btn", "移除 PowerShell 集成");
+    const installShell = el("button", "settings-integration-btn", "安装 PowerShell 集成");
+    installShell.type = "button";
+    const removeShell = el("button", "settings-integration-btn", "移除 PowerShell 集成");
+    removeShell.type = "button";
     shellActions.append(installShell, removeShell);
     page.append(shellStatus, shellActions);
 
     page.appendChild(el("div", "settings-section settings-integration-section", "Agent 状态"));
-    page.appendChild(el("div", "settings-hint",
-      "Claude 和 Codex 使用原生终端协议，无需写入配置。此操作仅清理旧版 sTerm Hook，并在本机已安装 Pi 时写入或更新 Pi 扩展；修改前会保留 .bak 备份。"));
-    const installAgents = el("button", "dialog-btn accent", "安装 / 更新 Agent 集成");
+    page.appendChild(el("div", "settings-integration-description",
+      "Claude Code 和 Codex 使用 sTerm 内置的原生终端协议，不写入配置。Pi 使用可选扩展；检查或更新时只会清理旧版 sTerm Hook，并保留 .bak 备份。"));
+    const agentStatuses = el("div", "settings-integration-status-list");
+    const addAgentStatus = (name: string): HTMLSpanElement => {
+      const row = el("div", "settings-integration-agent");
+      row.appendChild(el("span", "settings-integration-agent-name", name));
+      const state = el("span", "settings-integration-state", "检查中…");
+      row.appendChild(state);
+      agentStatuses.appendChild(row);
+      return state;
+    };
+    const claudeState = addAgentStatus("Claude Code");
+    const codexState = addAgentStatus("Codex");
+    const piState = addAgentStatus("Pi");
+    page.appendChild(agentStatuses);
+    const installAgents = el("button", "settings-integration-btn settings-integration-agent-btn", "检查并更新 Agent 集成");
+    installAgents.type = "button";
     page.appendChild(installAgents);
 
-    const result = el("div", "settings-error");
+    const result = el("div", "settings-integration-result");
     result.setAttribute("role", "status");
     page.appendChild(result);
 
     let busy = false;
+    let shellSupported = true;
+    let shellInstalled = false;
+    const setState = (
+      target: HTMLSpanElement,
+      text: string,
+      tone: "ready" | "muted" | "warning" | "error",
+    ): void => {
+      target.className = `settings-integration-state ${tone}`;
+      target.textContent = text;
+    };
+    const showResult = (text: string, error = false): void => {
+      result.className = error
+        ? "settings-integration-result settings-integration-result-error"
+        : "settings-integration-result";
+      result.textContent = text;
+    };
+    const updateActions = (): void => {
+      installShell.disabled = busy || !shellSupported;
+      removeShell.disabled = busy || !shellSupported || !shellInstalled;
+      installAgents.disabled = busy;
+    };
     const setBusy = (value: boolean): void => {
       busy = value;
-      installShell.disabled = value;
-      removeShell.disabled = value;
-      installAgents.disabled = value;
+      updateActions();
     };
     const refreshShellStatus = async (): Promise<void> => {
       try {
         const status = await invoke<ShellIntegrationStatus>("shell_integration_status", { shellId: cb.shellId });
-        shellStatus.textContent = status.installed
-          ? "已安装。移除时只删除 sTerm 标记包围的代码块。"
-          : "尚未安装。默认不修改 PowerShell profile。";
-        installShell.disabled = busy;
-        removeShell.disabled = busy || !status.installed;
+        shellSupported = true;
+        shellInstalled = status.installed;
+        setState(
+          shellState,
+          status.installed
+            ? "已安装 · 只会移除 sTerm 标记代码"
+            : "未安装 · 默认不修改 Profile",
+          status.installed ? "ready" : "muted",
+        );
       } catch (reason) {
-        shellStatus.textContent = "当前默认 Shell 不支持 PowerShell 集成。";
-        installShell.disabled = true;
-        removeShell.disabled = true;
-        result.textContent = String(reason);
+        shellSupported = false;
+        shellInstalled = false;
+        setState(shellState, "当前默认 Shell 不支持", "muted");
+        showResult(String(reason), true);
+      } finally {
+        updateActions();
+      }
+    };
+    const refreshAgentStatus = async (): Promise<AgentIntegrationStatus | undefined> => {
+      try {
+        const status = await invoke<AgentIntegrationStatus>("agent_integration_status");
+        setState(claudeState, "原生协议 · 无需安装", "ready");
+        setState(codexState, "原生协议 · 无需安装", "ready");
+        const pi = {
+          installed: ["已安装", "ready"] as const,
+          needs_update: ["可更新", "warning"] as const,
+          not_installed: ["未安装", "muted"] as const,
+          not_detected: ["未检测到 Pi 配置", "muted"] as const,
+        }[status.pi];
+        setState(piState, pi[0], pi[1]);
+        return status;
+      } catch (reason) {
+        setState(claudeState, "状态读取失败", "error");
+        setState(codexState, "状态读取失败", "error");
+        setState(piState, "状态读取失败", "error");
+        showResult("读取 Agent 集成状态失败：" + String(reason), true);
+        return undefined;
       }
     };
     installShell.onclick = async () => {
       if (busy) return;
       setBusy(true);
-      result.textContent = "";
+      showResult("");
       try {
         await invoke<ShellIntegrationStatus>("install_shell_integration", { shellId: cb.shellId });
         await refreshShellStatus();
       } catch (reason) {
-        result.textContent = "安装 PowerShell 集成失败：" + String(reason);
+        showResult("安装 PowerShell 集成失败：" + String(reason), true);
       } finally {
         setBusy(false);
-        void refreshShellStatus();
       }
     };
     removeShell.onclick = async () => {
       if (busy) return;
       setBusy(true);
-      result.textContent = "";
+      showResult("");
       try {
         await invoke<ShellIntegrationStatus>("remove_shell_integration", { shellId: cb.shellId });
         await refreshShellStatus();
       } catch (reason) {
-        result.textContent = "移除 PowerShell 集成失败：" + String(reason);
+        showResult("移除 PowerShell 集成失败：" + String(reason), true);
       } finally {
         setBusy(false);
-        void refreshShellStatus();
       }
     };
     installAgents.onclick = async () => {
       if (busy) return;
       setBusy(true);
-      result.textContent = "";
+      showResult("");
       try {
         for (const cli of ["claude", "codex", "pi"]) {
           await invoke("install_agent_integration", { cli });
         }
-        result.className = "settings-hint";
-        result.textContent = "Agent 集成已检查；请重启对应 Agent 进程后验证状态。";
+        const status = await refreshAgentStatus();
+        if (status?.pi === "installed") {
+          showResult("Agent 集成已检查；如正在运行 Pi，请重启它以加载扩展。");
+        } else if (status?.pi === "not_detected") {
+          showResult("已检查原生 Agent 集成；未检测到 Pi 配置，因此未写入 Pi 扩展。");
+        }
       } catch (reason) {
-        result.className = "settings-error";
-        result.textContent = "更新 Agent 集成失败：" + String(reason);
+        showResult("更新 Agent 集成失败：" + String(reason), true);
       } finally {
         setBusy(false);
-        void refreshShellStatus();
       }
     };
     void refreshShellStatus();
+    void refreshAgentStatus();
     return page;
   };
 

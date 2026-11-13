@@ -9,9 +9,13 @@ export interface OverlaySession {
   active: boolean;
 }
 
+export type OverlayDock = "left" | "right" | "top" | "bottom";
+
 export interface OverlaySnapshot {
   enabled: boolean;
   background_opacity: number;
+  dock: OverlayDock | null;
+  collapsed: boolean;
   revision: number;
   sessions: OverlaySession[];
 }
