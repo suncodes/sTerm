@@ -552,8 +552,8 @@ export class Sidebar {
       labelEl.textContent = it.label!;
       item.appendChild(labelEl);
       item.onclick = () => {
-        it.fn?.();
         closeAllMenus();
+        it.fn?.();
       };
       menu.appendChild(item);
     }
@@ -613,44 +613,158 @@ export class Sidebar {
   /* ---------- 移动菜单 ---------- */
 
   private openMoveMenu(ws: Workspace, anchor: HTMLElement): void {
-    closeAllMenus();
-    const menu = document.createElement("div");
-    menu.className = "context-menu";
+    type MenuLayer = {
+      menu: HTMLElement;
+      trigger?: HTMLElement;
+      toggle?: HTMLButtonElement;
+    };
 
-    const mk = (label: string, icon: string | null, fn: () => void) => {
-      const item = document.createElement("div");
-      item.className = "menu-item";
-      if (icon) {
-        const iconEl = document.createElement("span");
-        iconEl.className = "mi-icon";
-        iconEl.innerHTML = icon;
-        item.appendChild(iconEl);
+    const { folders } = this.store.data;
+    const layers = new Map<number, MenuLayer>();
+    let closeTimer: number | undefined;
+    let openTimer: number | undefined;
+
+    const clearCloseTimer = (): void => {
+      if (closeTimer !== undefined) {
+        window.clearTimeout(closeTimer);
+        closeTimer = undefined;
       }
-      const labelEl = document.createElement("span");
-      labelEl.textContent = label;
-      item.appendChild(labelEl);
-      item.onclick = () => {
-        fn();
-        closeAllMenus();
+    };
+    const clearOpenTimer = (): void => {
+      if (openTimer !== undefined) {
+        window.clearTimeout(openTimer);
+        openTimer = undefined;
+      }
+    };
+    const childrenOf = (parentId: string | null): Folder[] =>
+      folders.filter((folder) => (folder.parent_id ?? null) === parentId);
+    const closeFrom = (depth: number): void => {
+      for (const [level, layer] of [...layers]) {
+        if (level < depth) continue;
+        layer.trigger?.classList.remove("submenu-open");
+        layer.toggle?.setAttribute("aria-expanded", "false");
+        layer.menu.remove();
+        layers.delete(level);
+      }
+    };
+    const scheduleCloseFrom = (depth: number): void => {
+      clearCloseTimer();
+      closeTimer = window.setTimeout(() => {
+        closeTimer = undefined;
+        closeFrom(depth);
+      }, 180);
+    };
+    const moveTo = (folderId: string | null): void => {
+      clearCloseTimer();
+      clearOpenTimer();
+      closeAllMenus();
+      void this.moveWorkspace(ws, folderId);
+    };
+    const createMenu = (depth: number): HTMLElement => {
+      const menu = document.createElement("div");
+      menu.className = "context-menu move-menu";
+      menu.style.zIndex = String(300 + depth);
+      menu.onmouseenter = clearCloseTimer;
+      menu.onmouseleave = () => {
+        clearOpenTimer();
+        scheduleCloseFrom(depth === 0 ? 1 : depth);
       };
+      return menu;
+    };
+
+    let openSubmenu: (
+      folder: Folder,
+      trigger: HTMLElement,
+      toggle: HTMLButtonElement,
+      parentDepth: number,
+    ) => void;
+    const appendFolderItem = (menu: HTMLElement, folder: Folder, depth: number): void => {
+      const children = childrenOf(folder.id);
+      const item = document.createElement("div");
+      item.className = "menu-item" + (children.length ? " menu-item-has-submenu" : "");
+      item.title = folder.name;
+
+      const icon = document.createElement("span");
+      icon.className = "mi-icon";
+      icon.innerHTML = Sidebar.ICONS.folder;
+      const label = document.createElement("span");
+      label.textContent = folder.name;
+      item.append(icon, label);
+      item.onclick = () => moveTo(folder.id);
+
+      if (children.length === 0) {
+        item.onmouseenter = () => {
+          clearCloseTimer();
+          clearOpenTimer();
+          closeFrom(depth + 1);
+        };
+        menu.appendChild(item);
+        return;
+      }
+
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "menu-submenu-trigger";
+      toggle.title = "展开子文件夹";
+      toggle.setAttribute("aria-label", `展开「${folder.name}」的子文件夹`);
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.innerHTML = Sidebar.ICONS.chevronRight;
+      toggle.onclick = (event) => {
+        event.stopPropagation();
+        clearOpenTimer();
+        openSubmenu(folder, item, toggle, depth);
+      };
+      item.appendChild(toggle);
+      item.onmouseenter = () => {
+        clearCloseTimer();
+        clearOpenTimer();
+        openTimer = window.setTimeout(() => {
+          openTimer = undefined;
+          if (item.isConnected) openSubmenu(folder, item, toggle, depth);
+        }, 220);
+      };
+      item.onmouseleave = clearOpenTimer;
       menu.appendChild(item);
     };
 
-    mk("未分组（根级）", Sidebar.ICONS.folder, () => void this.store.move(ws.id, null));
-    const pathOf = (id: string): string => {
-      const { folders } = this.store.data;
-      const byId = new Map(folders.map((f) => [f.id, f]));
-      const parts: string[] = [];
-      let cur = byId.get(id);
-      while (cur) {
-        parts.unshift(cur.name);
-        cur = cur.parent_id ? byId.get(cur.parent_id) : undefined;
-      }
-      return parts.join(" / ");
+    openSubmenu = (folder, trigger, toggle, parentDepth) => {
+      const depth = parentDepth + 1;
+      clearCloseTimer();
+      const existing = layers.get(depth);
+      if (existing?.trigger === trigger) return;
+      closeFrom(depth);
+
+      const menu = createMenu(depth);
+      for (const child of childrenOf(folder.id)) appendFolderItem(menu, child, depth);
+      layers.set(depth, { menu, trigger, toggle });
+      trigger.classList.add("submenu-open");
+      toggle.setAttribute("aria-expanded", "true");
+      document.body.appendChild(menu);
+      positionSubmenu(menu, trigger);
     };
-    for (const f of this.store.data.folders) {
-      mk(pathOf(f.id), Sidebar.ICONS.folder, () => void this.store.move(ws.id, f.id));
+
+    const menu = createMenu(0);
+    layers.set(0, { menu });
+
+    const root = document.createElement("div");
+    root.className = "menu-item";
+    root.onmouseenter = () => {
+      clearCloseTimer();
+      clearOpenTimer();
+      closeFrom(1);
+    };
+    {
+      const icon = document.createElement("span");
+      icon.className = "mi-icon";
+      icon.innerHTML = Sidebar.ICONS.folder;
+      const label = document.createElement("span");
+      label.textContent = "未分组（根级）";
+      root.append(icon, label);
     }
+    root.onclick = () => moveTo(null);
+    menu.appendChild(root);
+
+    for (const folder of childrenOf(null)) appendFolderItem(menu, folder, 0);
 
     const sep = document.createElement("div");
     sep.className = "menu-sep";
@@ -658,14 +772,18 @@ export class Sidebar {
 
     const newFolder = document.createElement("div");
     newFolder.className = "menu-item";
+    newFolder.onmouseenter = () => {
+      clearCloseTimer();
+      clearOpenTimer();
+      closeFrom(1);
+    };
     {
-      const iconEl = document.createElement("span");
-      iconEl.className = "mi-icon";
-      iconEl.innerHTML = Sidebar.ICONS.folderPlus;
-      newFolder.appendChild(iconEl);
-      const labelEl = document.createElement("span");
-      labelEl.textContent = "新建文件夹并移入";
-      newFolder.appendChild(labelEl);
+      const icon = document.createElement("span");
+      icon.className = "mi-icon";
+      icon.innerHTML = Sidebar.ICONS.folderPlus;
+      const label = document.createElement("span");
+      label.textContent = "新建文件夹并移入";
+      newFolder.append(icon, label);
     }
     newFolder.onclick = () => {
       const input = document.createElement("input");
@@ -673,19 +791,23 @@ export class Sidebar {
       input.placeholder = "文件夹名称，回车确认";
       newFolder.replaceWith(input);
       input.focus();
-      input.onkeydown = (e) => {
-        e.stopPropagation();
-        if (e.key === "Enter") {
-          e.preventDefault();
+      input.onkeydown = (event) => {
+        event.stopPropagation();
+        if (event.key === "Enter") {
+          event.preventDefault();
           const name = input.value.trim();
           if (name) {
             void (async () => {
-              const f = await this.store.folderAdd(name);
-              await this.store.move(ws.id, f.id);
+              try {
+                const folder = await this.store.folderAdd(name);
+                await this.moveWorkspace(ws, folder.id);
+              } catch (reason) {
+                showToast("新建文件夹失败：" + String(reason), [], 5000);
+              }
             })();
           }
           closeAllMenus();
-        } else if (e.key === "Escape") {
+        } else if (event.key === "Escape") {
           closeAllMenus();
         }
       };
@@ -694,6 +816,14 @@ export class Sidebar {
 
     document.body.appendChild(menu);
     positionMenu(menu, anchor);
+  }
+
+  private async moveWorkspace(ws: Workspace, folderId: string | null): Promise<void> {
+    try {
+      await this.store.move(ws.id, folderId);
+    } catch (reason) {
+      showToast(`移动「${ws.name}」失败：${String(reason)}`, [], 5000);
+    }
   }
 
   /* ---------- 导入历史工作区（M2） ---------- */
@@ -860,8 +990,22 @@ export function closeAllMenus(): void {
 function positionMenu(menu: HTMLElement, anchor: HTMLElement): void {
   const rect = anchor.getBoundingClientRect();
   const width = menu.offsetWidth || 200;
+  const height = menu.offsetHeight || 100;
   menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`;
-  menu.style.top = `${Math.min(rect.bottom + 4, window.innerHeight - 60)}px`;
+  menu.style.top = `${Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - height - 8))}px`;
+}
+
+/** 紧贴触发项展示子菜单；右侧空间不足时自动翻到左侧。 */
+function positionSubmenu(menu: HTMLElement, trigger: HTMLElement): void {
+  const rect = trigger.getBoundingClientRect();
+  const width = menu.offsetWidth || 200;
+  const height = menu.offsetHeight || 100;
+  const gap = 3;
+  const right = rect.right + gap;
+  const left = rect.left - width - gap;
+  const x = right + width <= window.innerWidth - 8 || left < 8 ? right : left;
+  menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - width - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(rect.top, window.innerHeight - height - 8))}px`;
 }
 
 // 点击菜单外关闭

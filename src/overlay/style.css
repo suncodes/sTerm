@@ -41,6 +41,7 @@ header { height: 26px; flex-shrink: 0; display: flex; align-items: center; gap: 
 .idle { color: #56cf76; }
 .exited { color: #ff7b72; }
 .empty { height: 32px; display: flex; align-items: center; justify-content: center; color: #c4c4cf; font-size: 11px; }
+.empty-handle { border: 0; background: transparent; padding: 0; }
 #overlay-error { font-size: 10px; line-height: 14px; color: #ffb4a9; overflow: auto; max-height: 28px; }
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .24); border-radius: 3px; }
@@ -61,6 +62,17 @@ body.collapsed .session.active { border-color: transparent; background: rgba(255
 body.collapsed .copy,
 body.collapsed .status { display: none; }
 body.collapsed .dot { width: 8px; height: 8px; box-shadow: 0 0 0 1px rgba(0, 0, 0, .34); }
+body.collapsed .empty { flex: 1 1 auto; min-width: 0; min-height: 0; width: auto; height: auto; }
+body.collapsed .empty-handle { display: grid; place-items: center; }
+body.collapsed .empty-handle::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #909097;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .34);
+}
+body.collapsed .empty-handle:hover { background: rgba(255, 255, 255, .10); }
 
 @media (prefers-reduced-motion: no-preference) {
   .panel, .session { transition: background-color 160ms ease, border-color 160ms ease; }

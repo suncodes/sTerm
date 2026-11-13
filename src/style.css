@@ -914,6 +914,27 @@ body.resizing * { pointer-events: none; }
   flex-shrink: 0;
 }
 .menu-item .mi-icon svg { width: 16px; height: 16px; }
+.menu-item.submenu-open { background: rgba(255, 255, 255, 0.08); }
+.menu-submenu-trigger {
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  margin-right: -4px;
+  padding: 3px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.menu-submenu-trigger svg { width: 14px; height: 14px; }
+.menu-item:hover .menu-submenu-trigger,
+.menu-item.submenu-open .menu-submenu-trigger { color: var(--fg); }
+.menu-submenu-trigger:hover { background: rgba(255, 255, 255, 0.10); }
+.menu-submenu-trigger:focus-visible { outline: 2px solid #a9baff; outline-offset: 1px; }
 .menu-item .mi-key {
   margin-left: auto;
   padding-left: 28px;
@@ -954,6 +975,11 @@ body.resizing * { pointer-events: none; }
   cursor: pointer;
 }
 .menu-ok:hover { background: var(--accent-btn-hover); }
+.move-menu {
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 
 /* ================= 导入面板 ================= */
 .import-menu { width: 380px; max-width: calc(100vw - 24px); }

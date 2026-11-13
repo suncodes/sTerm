@@ -209,9 +209,9 @@ export function openSettings(cb: SettingsCallbacks): void {
     row.append(copy, input);
     page.appendChild(row);
     page.appendChild(el("div", "settings-hint",
-      "主窗口最小化后继续显示。拖动小窗顶部可移动，位置自动保存；拖至任一屏幕边缘会吸附并收起为状态点，点击状态点恢复展开。关闭小窗不会结束会话，退出 sTerm 后小窗同时关闭。"));
+      "主窗口最小化后继续显示。拖动小窗顶部可移动，位置自动保存；拖至任一屏幕边缘会吸附并收起为状态点，暂无会话时显示中性把手；点击即可恢复展开。关闭小窗不会结束会话，退出 sTerm 后小窗同时关闭。"));
     page.appendChild(el("div", "settings-hint",
-      "开启后始终显示小窗；已识别的 Agent 会话状态与标签栏一致，暂未识别时显示“暂无 Agent 会话”。首次开启默认位于主屏右上方。"));
+      "已识别的 Agent 会话状态与标签栏一致；暂未识别时显示“暂无 Agent 会话”。首次开启默认位于主屏右上方。"));
     page.appendChild(el("div", "settings-section settings-overlay-appearance", "外观"));
     const opacityRow = el("div", "settings-row settings-opacity-row");
     const opacityLabel = el("label", "settings-label", "底色透明度");

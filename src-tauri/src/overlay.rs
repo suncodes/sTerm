@@ -108,8 +108,8 @@ impl OverlayState {
             enabled: inner.prefs.enabled,
             background_opacity: inner.prefs.background_opacity.min(100),
             dock: inner.prefs.dock,
-            // 没有状态点时不能只保留边缘细条，否则“暂无 Agent 会话”不可见。
-            collapsed: uses_collapsed_layout(&inner.prefs, inner.sessions.len()),
+            // 空状态在边缘也使用中性把手，避免会话结束后重新弹出完整窗口。
+            collapsed: uses_collapsed_layout(&inner.prefs),
             revision: inner.revision,
             sessions: inner.sessions.clone(),
         })
@@ -153,8 +153,8 @@ fn normalize_preferences(prefs: &mut Preferences) {
     }
 }
 
-fn uses_collapsed_layout(prefs: &Preferences, session_count: usize) -> bool {
-    prefs.collapsed && prefs.dock.is_some() && session_count > 0
+fn uses_collapsed_layout(prefs: &Preferences) -> bool {
+    prefs.collapsed && prefs.dock.is_some()
 }
 
 fn save_preferences_if_changed(
@@ -903,8 +903,9 @@ mod tests {
             dock: Some(DockEdge::Right),
             collapsed: true,
         };
-        assert!(!uses_collapsed_layout(&prefs, 0));
-        assert!(uses_collapsed_layout(&prefs, 1));
+        assert!(uses_collapsed_layout(&prefs));
+        let expanded = Preferences { collapsed: false, ..prefs };
+        assert!(!uses_collapsed_layout(&expanded));
     }
 
     #[test]
@@ -931,6 +932,7 @@ mod tests {
             }
         }
         assert_eq!(collapsed_size(DockEdge::Left, 1, 1.0, area), PhysicalSize::new(28, 28));
+        assert_eq!(collapsed_size(DockEdge::Right, 0, 1.0, area), PhysicalSize::new(28, 28));
         assert_eq!(collapsed_size(DockEdge::Top, 3, 1.0, area), PhysicalSize::new(66, 28));
         assert_eq!(pixels(EXPOSED_SIZE, 1.5), 24);
     }

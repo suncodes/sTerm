@@ -8,7 +8,7 @@ sTerm is a lightweight Windows terminal optimized for everyday AI coding-agent w
 
 - PowerShell 7, Windows PowerShell, and cmd sessions powered by ConPTY
 - Tabs, saved workspaces, folders, and recent agent-session discovery
-- Optional status indicators for Claude Code, Codex, and Pi, with edge-docking status strips
+- Optional status indicators for Claude Code, Codex, and Pi, with edge-docking status strips and a neutral empty-state handle
 - Search, keyboard shortcuts, configurable fonts, and an optional always-on-top status overlay
 
 ## Requirements

@@ -37,16 +37,29 @@ function render(snapshot: OverlaySnapshot): void {
   document.body.classList.toggle("collapsed", collapsed);
   document.body.classList.remove("dock-left", "dock-right", "dock-top", "dock-bottom");
   if (collapsed && snapshot.dock) document.body.classList.add("dock-" + snapshot.dock);
-  collapseButton.hidden = collapsed || snapshot.dock === null || snapshot.sessions.length === 0;
+  collapseButton.hidden = collapsed || snapshot.dock === null;
   document.documentElement.style.setProperty("--panel-opacity", String(snapshot.background_opacity / 100));
   document.getElementById("session-count")!.textContent = String(snapshot.sessions.length);
   const scroll = list.scrollTop;
   const fragment = document.createDocumentFragment();
   if (snapshot.sessions.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "empty";
-    empty.textContent = "暂无 Agent 会话";
-    fragment.appendChild(empty);
+    if (collapsed) {
+      const handle = document.createElement("button");
+      handle.type = "button";
+      handle.className = "empty empty-handle";
+      handle.title = "暂无 Agent 会话（点击展开悬浮窗）";
+      handle.setAttribute("aria-label", handle.title);
+      handle.onclick = () => {
+        errorEl.hidden = true;
+        expand();
+      };
+      fragment.appendChild(handle);
+    } else {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "暂无 Agent 会话";
+      fragment.appendChild(empty);
+    }
   }
   for (const session of snapshot.sessions) {
     const row = document.createElement("button");

@@ -4,6 +4,17 @@ All notable changes to sTerm are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-13
+
+### Changed
+
+- Use the application icon for the NSIS installer and uninstaller.
+
+### Fixed
+
+- Keep an edge-docked empty Agent overlay compact as a neutral handle that expands on click.
+- Restore the workspace “Move to folder…” target chooser as an edge-aware cascading folder menu, and report failed moves.
+
 ## [0.2.0] - 2026-11-13
 
 ### Changed
