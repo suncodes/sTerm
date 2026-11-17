@@ -2,7 +2,7 @@
 
 ## 默认行为
 
-sTerm 是本地桌面应用。正常运行时，sTerm 自身不发起遥测、分析或账号登录请求。运行在终端中的命令和 Agent 可能自行访问网络；这由相应命令或 Agent 决定，不是 sTerm 的遥测行为。
+sTerm 是本地桌面应用。默认不发起遥测、分析或账号登录请求，远程访问默认关闭。运行在终端中的命令和 Agent 可能自行访问网络；这由相应命令或 Agent 决定，不是 sTerm 的遥测行为。
 
 诊断日志仅记录终端生命周期、尺寸和窗口诊断信息，不记录命令输入、终端输出、提示词或模型响应。
 
@@ -13,7 +13,8 @@ sTerm 是本地桌面应用。正常运行时，sTerm 自身不发起遥测、�
 | 工作区与悬浮窗偏好 | %APPDATA%\io.github.suncodes.sterm | 保存用户创建的工作区、文件夹和悬浮窗设置 |
 | 诊断日志 | %LOCALAPPDATA%\io.github.suncodes.sterm\logs | 排查启动、窗口和终端生命周期问题；最多保留当前日志和一份轮转日志 |
 | Pi 事件信箱 | %LOCALAPPDATA%\sTerm\events | 在应用运行期间转发 Pi 的状态事件；会话结束后自动清理 |
-| WebView 本地设置 | 应用 WebView 存储 | 保存界面字号和侧栏宽度等展示偏好 |
+| WebView 本地设置 | 应用 WebView 存储 | 保存界面字号、侧栏宽度、远程默认权限与监听偏好 |
+| 可选公网组件与凭证 | %LOCALAPPDATA%\io.github.suncodes.sterm\remote-tools | 按需下载的隧道客户端、文件校验值、Cloudflare 地址与当前 Windows 用户 DPAPI 加密的运行凭证 |
 
 退出 sTerm 后，可自行删除上述目录重置本地设置。删除前请先关闭所有 sTerm 进程。
 
@@ -25,8 +26,18 @@ sTerm 默认不改写 PowerShell profile、Claude/Codex 配置或 Pi 配置。
 - 在同一页面安装/更新 Agent 集成时，Claude/Codex 仅清理旧版 sTerm Hook，Pi 仅在本机已安装 Pi 时写入其 sterm-events.ts 扩展。已有配置修改前同样保留 .bak 备份。
 - WSL、Linux、macOS 或 SSH 远端的可选安装器需要由用户在对应环境中手动运行，说明见 [integrations/README.md](integrations/README.md)。
 
-## 数据不会做什么
+## 可选远程访问
 
-- 不上传工作区列表、终端输入输出、Agent 会话内容或诊断日志。
+在「设置 → 远程访问」开启后，sTerm 仅向已扫码配对的浏览器同步允许分享的终端画面、标题、工作目录与 Agent 状态。首次默认为自动分享会话、禁止输入，可统一修改默认权限或为会话设置例外。允许输入并接管后，浏览器输入会写入同一个本地终端。配对、输出及网页输入草稿仅保留在内存中；不会新增终端内容日志或历史存档。
+
+二维码中的一次性密钥五分钟内有效，成功配对后用浏览器 HttpOnly Cookie 保存十二小时的访问凭证。可以在连接页撤销全部设备；关闭远程功能或退出应用也会撤销全部凭证。局域网使用 HTTP，请仅在可信网络使用。
+
+显式选择公网连接时，sTerm 会从 GitHub/Cloudflare 或 ngrok 官方分发源下载组件，并由对应服务转发远程访问流量，受该服务条款与隐私政策约束。HTTPS 由公网服务终止，这不构成浏览器与电脑之间的端到端加密。运行凭证通过子进程环境传入，不写入命令行或日志。Cloudflare 自动配置所需的管理 API Token 只用于当次操作，不保存到磁盘。
+
+sTerm 不注册系统服务、不改写系统环境变量或防火墙规则；退出时仅停止自己启动的隧道进程。独立开发版使用 `io.github.suncodes.sterm.remote-dev` 数据目录。详细操作见 [远程访问说明](docs/remote-access.md)。
+
+## 其他数据边界
+
+- 不进行遥测，不上传工作区列表或诊断日志；终端内容仅在显式启用远程访问时同步给已配对浏览器。
 - 不读取或修改不属于 sTerm 集成范围的 Shell profile、Agent Hook 或配置字段。
-- 不自动安装 CLI、浏览器扩展、驱动或系统服务。
+- 不自动安装浏览器扩展、驱动或系统服务；公网 CLI 仅在用户选择连接后下载到应用数据目录。

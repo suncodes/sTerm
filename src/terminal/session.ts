@@ -1,6 +1,7 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -12,6 +13,8 @@ import { changeDirectoryCommand } from "./commands";
 import { cwdFromFileUri } from "../util";
 import { showToast } from "../ui/toast";
 import type { AgentName, ShellInfo } from "../types";
+import type { SharedSession } from "../remote/types";
+import { PendingTerminalSequence } from "../remote/pending";
 
 /** 状态栏：当前活动终端尺寸 */
 function updateStatusSize(cols: number, rows: number): void {
@@ -41,6 +44,7 @@ export interface SessionOptions {
   onSearchOpen?: () => void;
   /** 右键"保存到工作区" */
   onSaveToWorkspace?: (session: TerminalSession) => void;
+  onLifecycle?: () => void;
 }
 
 /**
@@ -77,6 +81,17 @@ export class TerminalSession {
   private agentOsc = new AgentOscChannel(({ agent, event }) => this.agentState.markAgentEvent(agent, event));
   private flushTimer: number | null = null;
   private alive = false;
+  private remoteShared = false;
+  private remotePaused = false;
+  private permissionQueue: Promise<void> = Promise.resolve();
+  private remoteAllowControl = false;
+  private remoteControlled = false;
+  private remoteSeq = 0;
+  private remoteQueue: Promise<unknown> = Promise.resolve();
+  private remoteBytes = 0;
+  private serializeAddon: SerializeAddon | undefined;
+  private pendingSequence = new PendingTerminalSequence();
+  private remoteBanner: HTMLElement;
   private cwdReported = false;
   private cwdQuery: Promise<void> | null = null;
   activeFlag = false;
@@ -99,6 +114,13 @@ export class TerminalSession {
     this.termEl = document.createElement("div");
     this.termEl.className = "term-inner";
     this.pane.appendChild(this.termEl);
+    this.remoteBanner = document.createElement("div");
+    this.remoteBanner.className = "remote-session-control hidden";
+    const reclaim = document.createElement("button");
+    reclaim.textContent = "手机正在控制 · 收回控制权";
+    reclaim.onclick = () => void invoke("remote_reclaim", { id: this.id }).catch(error => showToast(String(error)));
+    this.remoteBanner.append(reclaim);
+    this.pane.append(this.remoteBanner);
 
     this.overlay = document.createElement("div");
     this.overlay.className = "term-overlay hidden";
@@ -160,6 +182,10 @@ export class TerminalSession {
 
     // 输入：先喂给检测器，再原样转发给 PTY
     this.term.onData((data) => {
+      if (this.remoteControlled) {
+        void invoke("pty_write", { id: this.id, generation: this.generation, data, protocolReply: true }).catch(() => {});
+        return;
+      }
       const line = this.tracker.feed(data);
       if (line !== null) {
         const agent = extractAgent(line);
@@ -170,6 +196,9 @@ export class TerminalSession {
       }
       void this.write(data);
     });
+    this.pane.addEventListener("paste", event => {
+      if (this.remoteControlled) { event.preventDefault(); event.stopImmediatePropagation(); }
+    }, true);
 
     // 滚轮由前端处理：备用屏幕不转为方向键，普通屏幕沿用终端回滚。
     this.term.attachCustomWheelEventHandler((e) => {
@@ -198,7 +227,7 @@ export class TerminalSession {
     this.term.parser.registerOscHandler(7501, (data) => {
       if (!this.acceptsOutput()) return true;
       if (data === "?") {
-        void this.write(PROGRAM_STATUS_RESPONSE);
+        void invoke("pty_write", { id: this.id, generation: this.generation, data: PROGRAM_STATUS_RESPONSE, protocolReply: true }).catch(() => {});
         return true;
       }
       return this.agentOsc.acceptProgramStatus(data);
@@ -212,12 +241,15 @@ export class TerminalSession {
     // 终端尺寸变化 → 状态栏
     this.term.onResize(() => {
       if (this.activeFlag) updateStatusSize(this.term.cols, this.term.rows);
+      if (this.remoteShared) this.term.write("\x00", () => this.publishRemote(""));
     });
   }
 
   async start(): Promise<void> {
     if (this.disposed || this.starting) return;
     this.starting = true;
+    if (this.remoteShared) await this.setRemoteShared(false, false).catch(() => this.remoteDisabled());
+    this.remotePaused = false;
     this.alive = false;
     const generation = ++this.generation;
     this.cwdReported = false;
@@ -266,6 +298,7 @@ export class TerminalSession {
       console.error("PTY 启动失败", error);
     } finally {
       this.starting = false;
+      this.opts.onLifecycle?.();
     }
   }
 
@@ -279,6 +312,7 @@ export class TerminalSession {
 
   async write(data: string): Promise<void> {
     if (!this.alive) return;
+    if (this.remoteControlled) { showToast("手机正在控制，请先收回控制权"); return; }
     await invoke("pty_write", { id: this.id, generation: this.generation, data }).catch(() => {});
   }
 
@@ -335,8 +369,10 @@ export class TerminalSession {
     this.flush();
     const remaining = this.mouseModeFilter.finish();
     if (remaining) this.writeOutput(remaining);
-    this.term.write("\r\n\x1b[90m■ shell 进程已退出\x1b[0m\r\n");
+    this.writeOutput("\r\n\x1b[90m■ shell 进程已退出\x1b[0m\r\n");
+    if (this.remoteShared) void this.setRemoteShared(false, false).catch(() => this.remoteDisabled());
     this.overlay.classList.remove("hidden");
+    this.opts.onLifecycle?.();
   }
 
   /* ---------- 激活状态 ---------- */
@@ -412,15 +448,133 @@ export class TerminalSession {
     if (this.queuedOutputGeneration !== generation) {
       this.queuedOutputGeneration = generation;
       // CAN 结束上一代未完成的控制序列；标记与输出在 xterm 队列中保持顺序。
-      this.term.write("\x18", () => { this.outputGeneration = generation; });
+      this.term.write("\x18", () => { this.outputGeneration = generation; this.pendingSequence.reset(); });
     }
-    this.term.write(text);
+    for (let index = 0; index < text.length;) {
+      let end = Math.min(index + 32768, text.length);
+      if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) end--;
+      const chunk = text.slice(index, end);
+      this.term.write(chunk, () => {
+        if (generation === this.generation && !this.disposed) {
+          this.pendingSequence.feed(chunk);
+          this.publishRemote(chunk);
+        }
+      });
+      index = end;
+    }
+  }
+
+  remoteInfo(): SharedSession {
+    return { id: this.id, generation: this.generation, title: this.title, cols: this.term.cols, rows: this.term.rows,
+      allowControl: this.remoteAllowControl, seq: this.remoteSeq, cwd: this.cwd,
+      agent: this.agentState.agent, agentStatus: this.agentState.status };
+  }
+
+  get isRunning(): boolean { return this.alive && !this.disposed && !this.starting; }
+  get isRemoteShared(): boolean { return this.remoteShared; }
+  get isRemotePaused(): boolean { return this.remotePaused; }
+  resumeRemoteSharing(): void { this.remotePaused = false; }
+  get isRemoteControllable(): boolean { return this.remoteAllowControl; }
+
+  setRemoteShared(enabled: boolean, allowControl: boolean): Promise<void> {
+    const generation = this.generation;
+    const operation = this.permissionQueue.catch(() => {}).then(async () => {
+      if (this.disposed || generation !== this.generation) return;
+      await this.updateRemoteSharing(enabled, allowControl, generation);
+    });
+    this.permissionQueue = operation;
+    return operation;
+  }
+
+  private async updateRemoteSharing(enabled: boolean, allowControl: boolean, generation: number): Promise<void> {
+    if (enabled && !this.alive) return;
+    const wasShared = this.remoteShared;
+    const previousAllow = this.remoteAllowControl;
+    const previousSeq = this.remoteSeq;
+    this.remoteAllowControl = allowControl;
+    if (!enabled) this.remoteShared = false;
+    if (enabled && !wasShared) this.remoteSeq = 0;
+    try {
+      await this.remoteQueue;
+      if (this.disposed || generation !== this.generation) return;
+      await invoke("remote_share", { session: this.remoteInfo(), enabled });
+      if (this.disposed || generation !== this.generation || enabled && !this.alive) {
+        await invoke("remote_share", { session: { ...this.remoteInfo(), generation }, enabled: false }).catch(() => {});
+        return;
+      }
+      this.remoteShared = enabled;
+    } catch (error) {
+      this.remoteShared = wasShared;
+      this.remoteAllowControl = previousAllow;
+      this.remoteSeq = previousSeq;
+      throw error;
+    }
+  }
+
+  remoteDisabled(paused = false): void {
+    this.remotePaused = paused;
+    this.remoteShared = false;
+    this.remoteAllowControl = false;
+    this.applyRemoteControl({ ...this.remoteInfo(), controller: null });
+  }
+
+  applyRemoteControl(session: SharedSession): void {
+    if (session.generation !== this.generation) return;
+    this.remoteControlled = Boolean(session.controller);
+    this.remoteBanner.classList.toggle("hidden", !this.remoteControlled);
+    if (this.term.textarea) this.term.textarea.readOnly = this.remoteControlled;
+    if (this.remoteControlled) this.cancelResize(); else this.refit();
+  }
+
+  async applyRemoteSize(generation: number, cols: number, rows: number): Promise<void> {
+    if (this.disposed || generation !== this.generation || !this.remoteControlled) return;
+    this.term.resize(cols, rows);
+    await invoke("pty_resize", { id: this.id, generation, cols, rows });
+    this.ptySentCols = cols;
+    this.ptySentRows = rows;
+  }
+
+  private publishRemote(data: string): void {
+    if (!this.remoteShared) return;
+    const info = this.remoteInfo();
+    info.seq = ++this.remoteSeq;
+    this.remoteBytes += data.length;
+    if (this.remoteBytes > 1024 * 1024) {
+      this.remoteBytes -= data.length;
+      this.remoteDisabled(true);
+      void this.remoteQueue.then(() => invoke("remote_share", { session: info, enabled: false })).catch(error => console.warn("暂停远程分享失败", error));
+      showToast("远程输出积压，已暂停分享；可在设置中重新选择此会话权限恢复");
+      return;
+    }
+    this.remoteQueue = this.remoteQueue.catch(() => {}).then(() => invoke("remote_publish", { ...info, data }))
+      .catch(error => {
+        if (!this.remoteShared) return;
+        this.remoteDisabled(true);
+        void invoke("remote_share", { session: info, enabled: false }).catch(() => {});
+        showToast("远程画面同步失败，已暂停分享：" + String(error));
+      })
+      .finally(() => { this.remoteBytes -= data.length; });
+  }
+
+  captureRemote(request: string, generation: number): void {
+    if (!this.remoteShared || generation !== this.generation) return;
+    if (this.flushTimer !== null) { window.clearTimeout(this.flushTimer); this.flushTimer = null; }
+    this.flush();
+    if (!this.serializeAddon) { this.serializeAddon = new SerializeAddon(); this.term.loadAddon(this.serializeAddon); }
+    this.term.write("\x00", () => {
+      if (!this.remoteShared || generation !== this.generation || this.disposed) return;
+      const info = this.remoteInfo();
+      let data: string;
+      try { data = this.serializeAddon!.serialize({ scrollback: 300 }) + this.pendingSequence.snapshot(); }
+      catch (error) { console.warn("等待终端控制序列完成后才能同步", error); return; }
+      this.remoteQueue = this.remoteQueue.catch(() => {}).then(() => invoke("remote_snapshot", { ...info, data, request })).catch(error => console.warn("远程画面同步失败", error));
+    });
   }
 
   /* ---------- 尺寸 ---------- */
 
   refit(): void {
-    if (this.disposed || !this.activeFlag) return;
+    if (this.disposed || !this.activeFlag || this.remoteControlled) return;
     this.cancelResize();
     // 前后端在同一批稳定尺寸上更新，避免拖动过程中反复重排。
     this.ptyResizeTimer = window.setTimeout(() => {
@@ -454,7 +608,7 @@ export class TerminalSession {
   }
 
   private async syncSize(): Promise<void> {
-    if (this.disposed || !this.activeFlag) return;
+    if (this.disposed || !this.activeFlag || this.remoteControlled) return;
     if (this.resizeInFlight) {
       this.resizePending = true;
       return;
@@ -493,6 +647,7 @@ export class TerminalSession {
       ev.stopPropagation();
       return false;
     };
+    if (this.remoteControlled && !(ctrl && ev.shiftKey && key === "c")) return consume();
 
     if (ctrl && !ev.shiftKey && key === "f") {
       this.opts.onSearchOpen?.();
@@ -555,6 +710,7 @@ export class TerminalSession {
   }
 
   private async paste(plain = false): Promise<void> {
+    if (this.remoteControlled) return;
     try {
       let text = await readText();
       if (!text || this.disposed) return;

@@ -4,6 +4,8 @@ mod diagnostics;
 mod events;
 mod overlay;
 mod pty;
+mod remote;
+mod tunnel;
 mod paths;
 mod storage;
 mod win_cwd;
@@ -45,11 +47,17 @@ fn pty_spawn(
 
 #[tauri::command]
 fn pty_write(
+    app: AppHandle,
     state: tauri::State<AppState>,
     id: u32,
     generation: u32,
     data: String,
+    protocol_reply: Option<bool>,
 ) -> Result<(), String> {
+    if protocol_reply != Some(true) && app.state::<remote::RemoteState>().current()
+        .is_some_and(|hub| !hub.local_write_allowed(id, generation)) {
+        return Err("手机正在控制此会话，请先在远程面板收回控制权".into());
+    }
     state.ptys.write(id, generation, &data)
 }
 
@@ -66,10 +74,12 @@ fn pty_resize(
 
 #[tauri::command]
 fn pty_kill(
+    app: AppHandle,
     state: tauri::State<AppState>,
     id: u32,
     generation: u32,
 ) -> Result<(), String> {
+    if let Some(hub) = app.state::<remote::RemoteState>().current() { hub.unshare(id, generation); }
     state.ptys.kill(id, generation)
 }
 
@@ -514,6 +524,8 @@ pub fn run() {
             console::init(&app.path().resource_dir()?)?;
             let store = workspaces::Store::load(app.handle())?;
             app.manage(overlay::OverlayState::load(app.handle())?);
+            app.manage(remote::RemoteState::default());
+            app.manage(tunnel::TunnelState::default());
             app.manage(AppState {
                 ptys: pty::PtyManager::new(),
                 ws: store,
@@ -526,6 +538,8 @@ pub fn run() {
         .on_window_event(|window, event| {
             // 仅主窗口销毁时结束终端与应用；关闭悬浮窗不会触发会话清理。
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                window.app_handle().state::<tunnel::TunnelState>().stop();
+                window.app_handle().state::<remote::RemoteState>().stop();
                 if let Some(state) = window.app_handle().try_state::<AppState>() {
                     state.ptys.kill_all();
                 }
@@ -534,6 +548,22 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            remote::remote_start,
+            remote::remote_status,
+            remote::remote_pair,
+            remote::remote_stop,
+            remote::remote_share,
+            remote::remote_publish,
+            remote::remote_snapshot,
+            remote::remote_reclaim,
+            remote::remote_revoke_clients,
+            tunnel::tunnel_config,
+            tunnel::tunnel_save,
+            tunnel::tunnel_install,
+            tunnel::tunnel_start,
+            tunnel::tunnel_status,
+            tunnel::tunnel_stop,
+            tunnel::tunnel_cloudflare_setup,
             overlay::overlay_init,
             overlay::overlay_snapshot,
             overlay::overlay_set_enabled,

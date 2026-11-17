@@ -10,9 +10,15 @@ sTerm source code is licensed under Apache License 2.0. Third-party components r
 | Tauri clipboard manager | 2.5.0 | Apache-2.0 or MIT |
 | portable-pty | 0.8.1 | MIT |
 | serde / serde_json / uuid / base64 | lockfile-pinned | Apache-2.0 or MIT |
-| xterm.js and its fit, search, web-links addons | 5.5.0 / lockfile-pinned | MIT |
+| xterm.js and its fit, search, web-links, serialize addons | 5.5.0 / lockfile-pinned | MIT |
+| qrcode | 1.5.4 | MIT |
+| axum / tokio / if-addrs | lockfile-pinned | MIT |
+| reqwest / sha2 | lockfile-pinned | Apache-2.0 or MIT |
+| zip | lockfile-pinned | MIT |
 
 The complete resolved dependency graph is recorded in src-tauri/Cargo.lock and package-lock.json. Those lockfiles are the version authority for a release.
+
+Cloudflared (Apache-2.0) and the ngrok agent (subject to ngrok's distribution and service terms) are not bundled. They are downloaded from their official distributions only when the user selects the corresponding public connection. Use of the optional services remains subject to their providers' terms.
 
 ## MIT-licensed JavaScript terminal components
 
@@ -21,6 +27,10 @@ The distributed web assets include xterm.js and its addons. They are licensed un
     Copyright (c) 2017-2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
     Copyright (c) 2014-2016, SourceLair Private Company (https://www.sourcelair.com)
     Copyright (c) 2012-2013, Christopher Jeffrey (https://github.com/chjj/)
+
+The QR-code generator qrcode includes this MIT copyright notice:
+
+    Copyright (c) 2012 Ryan Day
 
 ## Windows console runtime
 

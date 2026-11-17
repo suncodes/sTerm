@@ -51,6 +51,9 @@ body {
 }
 #app { display: flex; height: 100%; }
 .hidden { display: none !important; }
+.remote-session-control { position: absolute; top: 6px; right: 16px; z-index: 5; }
+.remote-session-control button { padding: 6px 10px; color: var(--fg); border: 1px solid var(--border-strong); background: var(--bg-bar); border-radius: var(--radius); cursor: pointer; font-size: 11px; }
+.remote-session-control button:hover { background: var(--bg-hover); }
 .dim { color: var(--fg-dim); }
 
 button { font-family: inherit; }
@@ -1108,8 +1111,8 @@ body.resizing * { pointer-events: none; }
 
 /* ================= 设置（双栏：左导航 + 右内容） ================= */
 .settings-dialog {
-  width: 720px;
-  height: 480px;
+  width: 820px;
+  height: 550px;
   max-width: calc(100vw - 48px);
   max-height: calc(100vh - 48px);
   background: var(--bg);
@@ -1152,6 +1155,9 @@ body.resizing * { pointer-events: none; }
   gap: 2px;
 }
 .settings-nav-item {
+  background: transparent;
+  border: 0;
+  text-align: left;
   padding: 8px 12px;
   border-radius: var(--radius);
   color: var(--fg-dim);

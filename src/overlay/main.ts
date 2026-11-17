@@ -3,13 +3,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { OverlaySnapshot } from "./types";
+import { AGENT_STATUS_LABELS } from "../terminal/agentstate";
 
 const list = document.getElementById("session-list")!;
 const collapseButton = document.getElementById("collapse-overlay") as HTMLButtonElement;
 const close = document.getElementById("close-overlay") as HTMLButtonElement;
 const errorEl = document.getElementById("overlay-error")!;
 const appWindow = getCurrentWindow();
-const labels = { running: "运行中", idle: "空闲", exited: "已退出" };
 const agents = { claude: "Claude", codex: "Codex", pi: "Pi" };
 let revision = -1;
 let collapsed = false;
@@ -66,7 +66,7 @@ function render(snapshot: OverlaySnapshot): void {
     row.type = "button";
     row.className = "session" + (session.active ? " active" : "") + (collapsed ? " collapsed-session" : "");
     row.dataset.sessionId = String(session.id);
-    const status = labels[session.status];
+    const status = AGENT_STATUS_LABELS[session.status];
     row.title = collapsed
       ? `${session.title} · ${agents[session.agent]} · ${status}（点击展开悬浮窗）`
       : `${session.title} · ${agents[session.agent]} · ${status}${session.active ? " · 当前标签" : ""}（点击返回会话）`;

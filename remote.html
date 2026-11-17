@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="referrer" content="no-referrer" />
+    <title>sTerm 远程终端</title>
+  </head>
+  <body>
+    <main id="remote-app">
+      <svg class="icon-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
+        <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m5 6 5 6-5 6m8 0h6"/></symbol>
+        <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+        <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12M3 6h.1M3 12h.1M3 18h.1"/></symbol>
+        <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+        <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></symbol>
+        <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 20V4m-6 6 6-6 6 6"/></symbol>
+        <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v16m-6-6 6 6 6-6"/></symbol>
+        <symbol id="i-left" viewBox="0 0 24 24"><path d="M20 12H4m6-6-6 6 6 6"/></symbol>
+        <symbol id="i-right" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+      </defs></svg>
+      <header class="client-header"><div class="client-brand"><svg class="icon brand-icon"><use href="#i-terminal"/></svg><span><strong>sTerm</strong><small>远程连接 · 本机终端</small></span></div><div class="header-actions"><span id="connection" role="status" data-state="connecting">正在连接…</span><button id="display-menu" class="touch-button" aria-label="显示与连接选项" aria-haspopup="dialog"><svg class="icon"><use href="#i-more"/></svg></button></div></header>
+      <div class="session-bar"><div id="current-session" class="current-session"><span id="current-dot" class="status-dot" hidden></span><span id="current-title">等待分享会话</span><span id="current-status" class="agent-status" role="status" hidden></span></div><div id="session-tabs" role="tablist" aria-label="远程会话"></div><button id="all-sessions" class="touch-button" aria-label="切换会话" title="切换会话" aria-haspopup="dialog" aria-expanded="false"><svg class="icon"><use href="#i-list"/></svg></button></div>
+      <section class="control-bar" aria-label="会话控制"><span id="session-path"></span><div><span id="control-state">只读</span><button id="claim" class="small-action" type="button" hidden disabled>接管</button><button id="release" class="small-action" type="button" hidden disabled>归还</button></div></section>
+      <div id="offline-banner" class="offline-banner" hidden><span id="offline-message">连接已断开 · 终端画面已保留</span><button id="reconnect" class="text-button">重新连接</button></div>
+      <p id="notice" class="notice" role="status" hidden></p>
+      <section id="screen-scroll" tabindex="0" aria-label="终端画面"><div id="screen"></div><div id="empty-screen" hidden>等待电脑端分享会话</div></section>
+      <div id="terminal-jump" hidden><button id="scroll-bottom">↓ 回到最新输出</button></div>
+      <div id="readonly-hint" class="readonly-hint"><svg class="icon"><use href="#i-lock"/></svg><span id="readonly-description">电脑端尚未允许此会话输入</span></div>
+      <section id="input-tools" aria-label="终端输入" hidden>
+        <div id="keys"><button data-key="escape">Esc</button><button data-key="tab">Tab</button><button id="ctrl-key" aria-pressed="false">Ctrl</button><button data-key="up" aria-label="上方向键"><svg class="icon"><use href="#i-up"/></svg></button><button data-key="down" aria-label="下方向键"><svg class="icon"><use href="#i-down"/></svg></button><button data-key="left" aria-label="左方向键"><svg class="icon"><use href="#i-left"/></svg></button><button data-key="right" aria-label="右方向键"><svg class="icon"><use href="#i-right"/></svg></button><button id="more-keys" aria-label="更多快捷键" aria-haspopup="dialog"><svg class="icon"><use href="#i-more"/></svg></button></div>
+        <div class="draft-area"><div class="draft-field"><label class="sr-only" for="draft">终端输入草稿</label><textarea id="draft" rows="2" placeholder="输入命令或文字，支持中文与多行…" autocomplete="off" autocapitalize="off" spellcheck="false" disabled></textarea><div class="draft-options"><label><input id="append-enter" type="checkbox" checked>追加回车</label><span>Ctrl ↵ 发送</span></div></div><button id="send" title="发送（Ctrl+Enter）" aria-label="发送输入" disabled>发送</button></div>
+      </section>
+      <div id="sheet-backdrop" class="sheet-backdrop" hidden><section class="client-sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title"><div class="sheet-heading"><strong id="sheet-title">所有会话</strong><button id="close-sheet" class="touch-button" aria-label="关闭面板"><svg class="icon"><use href="#i-close"/></svg></button></div>
+        <div id="session-list" hidden></div>
+        <div id="extra-keys" class="keys-grid" hidden><button data-key="ctrlC">Ctrl+C</button><button data-key="ctrlD">Ctrl+D</button><button data-key="ctrlL">Ctrl+L</button><button data-key="shiftTab">Shift+Tab</button><button data-key="home">Home</button><button data-key="end">End</button><button data-key="pageUp">Page Up</button><button data-key="pageDown">Page Down</button><button data-key="enter">Enter</button></div>
+        <div id="display-options" hidden><div class="sheet-row"><span>终端字号</span><div class="font-stepper"><button id="font-smaller" aria-label="减小终端字号">−</button><output id="font-value">13 px</output><button id="font-larger" aria-label="增大终端字号">+</button></div></div><label class="sheet-row"><span>适配屏幕宽度</span><input id="fit-width" type="checkbox" class="settings-switch"></label><p id="fit-description" class="sheet-hint">需先接管；调整后会同步改变电脑端的终端尺寸。</p><button id="resize" class="sheet-menu-button" disabled>立即适配当前尺寸</button><div class="sheet-row"><span>终端尺寸</span><span id="dimensions">80 × 24</span></div><button id="menu-sessions" class="sheet-menu-button">所有会话</button><button id="menu-reconnect" class="sheet-menu-button">重新连接</button></div>
+      </section></div>
+    </main>
+    <script type="module" src="/src/remote/client.ts"></script>
+  </body>
+</html>

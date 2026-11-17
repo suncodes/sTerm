@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { TabManager } from "./terminal/tabmanager";
 import { AgentOverlay } from "./overlay/controller";
+import { RemoteController } from "./remote/controller";
 import type { TerminalSession } from "./terminal/session";
 import { WorkspaceStore } from "./workspaces/store";
 import { Sidebar, closeAllMenus } from "./workspaces/sidebar";
@@ -61,6 +62,7 @@ async function main(): Promise<void> {
   document.getElementById("btn-toggle-sidebar")?.addEventListener("click", toggleSidebar);
 
   const overlay = new AgentOverlay((id) => tabs.activate(id));
+  let remote: RemoteController | undefined;
 
   // 多标签终端
   const tabs = new TabManager({
@@ -70,7 +72,10 @@ async function main(): Promise<void> {
     onAgent: (session, agent) => agentFlow(session, agent, store),
     onSidebarToggle: toggleSidebar,
     onSearchOpen: () => openSearch(),
-    onSessionsChange: (manager) => overlay.sync(manager.sessions, manager.active?.id),
+    onSessionsChange: (manager) => {
+      overlay.sync(manager.sessions, manager.active?.id);
+      void remote?.sync().catch(error => showToast("同步远程会话权限失败：" + String(error)));
+    },
     getTermFontSize: () => currentTermFont,
     onSaveToWorkspace: (session) => void saveSessionToWorkspace(session, store, tabs),
     onTabContext: (id, ev) => buildTabContextMenu(tabs, store, id, ev),
@@ -80,8 +85,12 @@ async function main(): Promise<void> {
     },
     onCwd: (s) => {
       if (s === tabs.active) sidebar.refresh();
+      void remote?.sync().catch(error => console.warn("同步远程目录失败", error));
     },
   });
+
+  remote = new RemoteController(tabs);
+  await remote.init();
 
   void overlay.init().then(() => overlay.sync(tabs.sessions, tabs.active?.id)).catch((error) => {
     console.error("悬浮窗初始化失败", error);
@@ -180,7 +189,7 @@ async function main(): Promise<void> {
     tabs.active?.refit();
   };
   document.getElementById("btn-settings")!.onclick = () =>
-    openSettings({ onTermFont: setTermFont, shellId: shell.id });
+    openSettings({ onTermFont: setTermFont, shellId: shell.id, remote: remote! });
   applyLayoutFonts(loadFontSettings());
   setTermFont(currentTermFont);
 

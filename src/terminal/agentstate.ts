@@ -4,6 +4,10 @@ import type { AgentEventKind } from "./agentevents";
 /** Agent 会话状态：无 / 运行中 / 空闲（任务完成）/ 已退出 */
 export type AgentStatus = "none" | "running" | "idle" | "exited";
 
+export const AGENT_STATUS_LABELS: Record<AgentStatus, string> = {
+  none: "", running: "运行中", idle: "空闲", exited: "已退出",
+};
+
 const EXIT_LINGER_MS = 5000;
 
 /** 文件信箱与终端 OSC 共用的事件状态机，不根据输出文字猜测进度。 */

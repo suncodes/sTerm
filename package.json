@@ -16,10 +16,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:remote": "npm run build && tauri dev --config src-tauri/tauri.remote-dev.conf.json",
     "prebuild": "npm run version:check",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "node --test scripts/test-agent-events.mjs scripts/test-agent-overlay.mjs scripts/test-version.mjs && python scripts/test-agent-integration.py",
+    "test": "node --test scripts/test-agent-events.mjs scripts/test-agent-overlay.mjs scripts/test-version.mjs scripts/test-remote.mjs && python scripts/test-agent-integration.py",
+    "test:remote": "node --test scripts/test-remote.mjs && cargo test --manifest-path src-tauri/Cargo.toml remote::tests && cargo test --manifest-path src-tauri/Cargo.toml tunnel::tests",
     "version:set": "node scripts/version.mjs set",
     "version:check": "node scripts/version.mjs check",
     "release": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1",
@@ -31,11 +33,15 @@
     "@tauri-apps/plugin-clipboard-manager": "^2.2.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-search": "^0.15.0",
+    "@xterm/addon-serialize": "0.13.0",
     "@xterm/addon-web-links": "^0.11.0",
-    "@xterm/xterm": "^5.5.0"
+    "@xterm/xterm": "^5.5.0",
+    "qrcode": "1.5.4"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.1.0",
+    "@types/qrcode": "1.5.6",
+    "@xterm/headless": "5.5.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"
   }

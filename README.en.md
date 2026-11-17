@@ -10,6 +10,7 @@ sTerm is a lightweight Windows terminal optimized for everyday AI coding-agent w
 - Tabs, saved workspaces, folders, and recent agent-session discovery
 - Optional status indicators for Claude Code, Codex, and Pi, with edge-docking status strips and a neutral empty-state handle
 - Search, keyboard shortcuts, configurable fonts, and an optional always-on-top status overlay
+- Optional QR-paired browser access to shared sessions over LAN, Cloudflare Tunnel, or ngrok; tunnel agents download on demand
 
 ## Requirements
 
@@ -27,6 +28,8 @@ npm run tauri build
 ~~~
 
 Use .\scripts\package.ps1 to generate the portable ZIP after building.
+
+Open **Settings → Remote access** to configure default sharing/input permissions and session exceptions. Phones switch sessions through the right-side drawer; wider browsers also show tabs. Use `npm run dev:remote` to test with an isolated application identifier while the installed version remains running. See [remote access setup](docs/remote-access.md) for pairing, public tunnels, and limitations.
 
 ## Releasing a version
 

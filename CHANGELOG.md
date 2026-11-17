@@ -4,6 +4,14 @@ All notable changes to sTerm are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Add optional QR-paired remote viewing and single-controller input for explicitly shared terminal sessions.
+- Support Cloudflare Tunnel and ngrok with on-demand agents, Windows-protected credentials, and optional Cloudflare tunnel/DNS setup.
+- Add an isolated remote development configuration and focused remote gateway, terminal-mirror, and credential tests.
+- Move remote access into Settings with connection, permissions, and public-tunnel sections; add saved sharing defaults, per-session exceptions, and device revocation.
+- Match the remote browser UI to the desktop theme, with a mobile session drawer, wide-screen tabs, per-session drafts, shortcut panels, and a fixed rectangular text send button.
+
 ## [0.2.1] - 2026-11-13
 
 ### Changed

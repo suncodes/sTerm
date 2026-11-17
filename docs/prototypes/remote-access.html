@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>sTerm · 远程访问交互原型</title>
+  <link rel="stylesheet" href="../../src/style.css">
+  <link rel="stylesheet" href="remote-access.css">
+  <script src="remote-access.js" defer></script>
+</head>
+<body data-view="compare">
+  <svg class="icon-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m5 6 5 6-5 6m8 0h6"/></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24"><path d="m9 3-.7 2.4-2.5 1L3.6 6l-2 3.5 1.9 1.9v1.2l-1.9 1.9 2 3.5 2.2-.4 2.5 1L9 21h4l.7-2.4 2.5-1 2.2.4 2-3.5-1.9-1.9v-1.2l1.9-1.9-2-3.5-2.2.4-2.5-1L13 3Z"/><circle cx="11" cy="12" r="3"/></symbol>
+      <symbol id="i-remote" viewBox="0 0 24 24"><rect x="3" y="3" width="14" height="11" rx="1.5"/><path d="M10 14v4m-4 0h7"/><rect x="15" y="10" width="6" height="11" rx="1.2"/><path d="M17 18h2"/></symbol>
+      <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18h1a2 2 0 0 0 1.5-3.3 1.5 1.5 0 0 1 1.2-2.5H18a3 3 0 0 0 3-3C21 7 17 3 12 3Z"/><path d="M6.5 11h.1M9 6.5h.1m5 0h.1m3 3.5h.1" stroke-width="3"/></symbol>
+      <symbol id="i-window" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9h18m-6 4h3v4h-3z"/></symbol>
+      <symbol id="i-plug" viewBox="0 0 24 24"><path d="m8 3 1 5m7-5-1 5M6 8h12v3a6 6 0 0 1-6 6v4m-6-9H4m14 0h2"/></symbol>
+      <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v.5"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+      <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+      <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12M3 6h.1M3 12h.1M3 18h.1"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="1.5"/><path d="M16 8V3H3v13h5"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 10a8 8 0 1 0-.6 6M20 4v6h-6"/></symbol>
+      <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 4 8 8-8 8"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+      <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="M12 20V4m-6 6 6-6 6 6"/></symbol>
+      <symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="M12 4v16m-6-6 6 6 6-6"/></symbol>
+      <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="M20 12H4m6-6-6 6 6 6"/></symbol>
+      <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></symbol>
+      <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 19V5h7l2 3h9v11Z"/></symbol>
+    </defs>
+  </svg>
+
+  <header class="review-toolbar">
+    <div class="review-brand"><svg class="icon"><use href="#i-terminal"/></svg><strong>sTerm</strong><span>远程访问</span><span class="version-tag">界面原型 · V2</span></div>
+    <div class="view-switch" role="group" aria-label="预览尺寸">
+      <button data-view="desktop" aria-pressed="false">电脑端</button>
+      <button data-view="mobile" aria-pressed="false">手机端</button>
+      <button data-view="browser" aria-pressed="false">浏览器</button>
+      <button data-view="compare" aria-pressed="true">并排</button>
+    </div>
+    <label class="demo-state">手机状态<select id="demo-state"><option value="readonly">只读</option><option value="available">可接管</option><option value="control">控制中</option><option value="offline">已断线</option></select></label>
+  </header>
+  <div class="review-note">可点击预览：设置入口、全局权限、会话切换、接管与输入。仅使用演示数据。</div>
+
+  <main class="review-stage">
+    <section id="desktop-preview" class="preview-item desktop-preview" aria-label="电脑端预览">
+      <div class="preview-caption"><span>电脑端 <span class="caption-dim">/ 设置 → 远程访问</span></span><span class="caption-dim">沿用现有双栏设置与主题</span></div>
+      <div class="desktop-window">
+        <div class="desktop-titlebar"><span class="desktop-app"><svg class="icon"><use href="#i-terminal"/></svg>sTerm</span><div class="window-actions"><button id="open-settings" class="icon-button" aria-label="打开设置" title="设置"><svg class="icon"><use href="#i-settings"/></svg></button><span>─</span><span>□</span><span>×</span></div></div>
+        <div class="desktop-workspace">
+          <aside class="workspace-nav"><div class="workspace-heading">工作区 <span>＋</span></div><div class="workspace-current"><svg class="icon"><use href="#i-folder"/></svg>sTerm</div><div class="workspace-session"><span class="status-dot gold"></span>Codex</div><div class="workspace-session"><span class="status-dot green"></span>api-server</div><div class="workspace-session muted">＋ 新建会话</div></aside>
+          <div class="workspace-main"><div class="desktop-tabs"><span class="tab active"><span class="status-dot gold"></span><span class="tab-label">sTerm · Codex</span><span>×</span></span><span class="tab"><span class="tab-label">PowerShell</span><span>×</span></span><span class="muted">＋</span></div><div id="desktop-controlbar" class="desktop-controlbar" hidden><span>iPhone 正在控制会话 <strong id="desktop-controller-session"></strong></span><button id="desktop-reclaim" class="text-button">收回控制</button></div><pre class="background-terminal">PS D:\workspace\sTerm&gt; codex
+
+  › 调整远程访问的界面
+
+  已读取项目设置与终端主题。
+  准备开始下一项任务。
+
+  D:\workspace\sTerm   ·   main</pre></div>
+        </div>
+        <div class="desktop-status"><span>PowerShell 7.5</span><span>UTF-8</span><span id="desktop-remote-status">远程访问已开启</span></div>
+
+        <div id="settings-overlay" class="preview-settings-overlay">
+          <section class="settings-dialog" role="dialog" aria-labelledby="settings-title">
+            <div class="settings-head"><span id="settings-title" class="settings-head-title">设置</span><button class="settings-close" id="close-settings" aria-label="关闭设置"><svg class="icon"><use href="#i-close"/></svg></button></div>
+            <div class="settings-body">
+              <nav class="settings-nav" aria-label="设置分类">
+                <button class="settings-nav-item" data-settings-page="appearance"><svg class="icon"><use href="#i-palette"/></svg><span>外观</span></button>
+                <button class="settings-nav-item" data-settings-page="overlay"><svg class="icon"><use href="#i-window"/></svg><span>悬浮窗</span></button>
+                <button class="settings-nav-item active" data-settings-page="remote" aria-current="page"><svg class="icon"><use href="#i-remote"/></svg><span>远程访问</span><span id="nav-live-dot" class="status-dot green"></span></button>
+                <button class="settings-nav-item" data-settings-page="integration"><svg class="icon"><use href="#i-plug"/></svg><span>集成</span></button>
+                <button class="settings-nav-item" data-settings-page="about"><svg class="icon"><use href="#i-info"/></svg><span>关于</span></button>
+              </nav>
+              <div class="settings-content">
+                <div id="other-settings" hidden></div>
+                <div id="remote-settings">
+                  <label class="remote-heading"><span><span class="settings-label page-title">远程访问</span><span class="heading-description">通过手机或浏览器，继续本机的终端会话</span></span><span class="heading-toggle"><span id="service-state" class="quiet-state">已开启</span><input id="remote-enabled" class="settings-switch" type="checkbox" checked aria-label="远程访问总开关"></span></label>
+                  <div class="settings-subtabs" role="tablist" aria-label="远程设置">
+                    <button id="tab-connection" role="tab" aria-selected="true" aria-controls="panel-connection" data-page="connection">连接</button>
+                    <button id="tab-permissions" role="tab" aria-selected="false" aria-controls="panel-permissions" data-page="permissions" tabindex="-1">会话权限</button>
+                    <button id="tab-public" role="tab" aria-selected="false" aria-controls="panel-public" data-page="public" tabindex="-1">公网</button>
+                  </div>
+
+                  <div id="panel-connection" role="tabpanel" aria-labelledby="tab-connection">
+                    <div id="connect-disabled" class="empty-connection" hidden><svg class="icon"><use href="#i-remote"/></svg><strong>开启后即可扫码连接</strong><p>先设置默认会话权限，也可以稍后再配置公网。</p><button class="settings-integration-btn primary" id="enable-service">开启远程访问</button></div>
+                    <div id="connect-enabled">
+                      <div class="connection-kind"><div class="segmented" role="group" aria-label="连接地址类型"><button data-address="lan" aria-pressed="true">局域网</button><button data-address="public" aria-pressed="false">公网</button></div><span id="address-hint" class="muted">手机与电脑连接同一网络</span></div>
+                      <div id="public-unavailable" class="inline-message" hidden><svg class="icon"><use href="#i-globe"/></svg><div>公网尚未连接<p>完成一次配置后，即可在外网扫码访问。</p><button class="text-button" id="go-public">前往公网设置 →</button></div></div>
+                      <div id="pairing-content" class="pairing-content">
+                        <div class="qr-column"><div class="qr-frame"><img id="demo-qr" src="remote-qr.svg" width="148" height="148" alt="演示二维码，仅编码无效示例地址"></div><span class="muted qr-caption">手机相机扫码配对</span></div>
+                        <div class="pairing-details"><span class="small-label">连接地址</span><div class="copy-field"><code id="connection-address">http://192.168.1.106:9876</code><button id="copy-address" class="icon-button" title="复制配对链接" aria-label="复制配对链接"><svg class="icon"><use href="#i-copy"/></svg></button></div><p class="muted pairing-description">二维码含一次性配对凭证，5 分钟内有效。<br>已连接设备不受二维码刷新影响。</p><button id="refresh-qr" class="settings-integration-btn"><svg class="icon"><use href="#i-refresh"/></svg>刷新二维码</button><p id="qr-expiry" class="quiet-detail">有效至 <span></span></p></div>
+                      </div>
+                      <div class="connection-summary"><span><span class="status-dot green"></span><strong id="shared-count">3</strong> 个会话已分享</span><span>已连接设备 <strong id="connected-count">1</strong></span><button class="text-button" id="show-devices">管理</button></div>
+                      <div id="connected-devices" class="device-detail" hidden><div><svg class="icon"><use href="#i-remote"/></svg><span>Safari · iPhone<small>刚刚活跃 · 当前演示设备</small></span><button class="settings-integration-btn" id="revoke-device">撤销</button></div></div>
+                      <details class="advanced-settings"><summary>高级选项</summary><div class="settings-row"><span>监听端口</span><input class="compact-field port-field" type="number" value="9876" min="1024" max="65535" aria-label="监听端口"></div><label class="settings-row"><span>允许局域网连接</span><input class="settings-switch" type="checkbox" checked aria-label="允许局域网连接"></label><p class="muted">正式实现中，修改监听选项需重启远程服务。</p></details>
+                    </div>
+                  </div>
+
+                  <div id="panel-permissions" role="tabpanel" aria-labelledby="tab-permissions" hidden>
+                    <label class="settings-row permission-default"><span><span class="settings-label">默认分享会话</span><span class="row-description">新会话自动出现在已配对的浏览器中</span></span><input id="default-share" class="settings-switch" type="checkbox" checked></label>
+                    <label class="settings-row permission-default"><span><span class="settings-label">默认允许输入</span><span class="row-description">手机主动接管后，可发送文字和快捷键</span></span><input id="default-input" class="settings-switch" type="checkbox"></label>
+                    <p class="inherit-hint">默认设置即时应用于所有「跟随默认」的会话。</p>
+                    <div class="session-list-heading"><span>当前会话 <span id="session-count" class="muted">4</span></span><button id="new-session" class="text-button">＋ 新建示例会话</button></div>
+                    <div id="permission-sessions"></div>
+                    <p class="settings-hint permission-footnote"><svg class="icon"><use href="#i-info"/></svg>允许输入后，电脑仍可随时收回控制权。</p>
+                  </div>
+
+                  <div id="panel-public" role="tabpanel" aria-labelledby="tab-public" hidden>
+                    <div class="public-heading"><span class="settings-label">公网连接</span><span id="tunnel-state" class="quiet-state">未连接</span></div>
+                    <div class="segmented provider-switch" role="group" aria-label="公网服务"><button data-provider="cloudflare" aria-pressed="true">Cloudflare Tunnel</button><button data-provider="ngrok" aria-pressed="false">ngrok</button></div>
+                    <p id="provider-description" class="provider-description">适合日常使用，通过自己的域名访问。</p>
+                    <label class="field-label" for="tunnel-token" id="token-label">Tunnel Token</label><input id="tunnel-token" class="compact-field full-field" type="password" placeholder="粘贴 Cloudflare 的隧道令牌" autocomplete="off">
+                    <label class="field-label" for="tunnel-domain">公网域名</label><input id="tunnel-domain" class="compact-field full-field" placeholder="terminal.example.com" autocomplete="off">
+                    <div class="public-actions"><button id="connect-tunnel" class="settings-integration-btn primary">连接 Cloudflare</button><span id="tunnel-domain-state" class="muted">未连接时仍可使用局域网二维码</span></div>
+                    <details id="provider-help" class="advanced-settings"><summary>首次使用 Cloudflare</summary><ol><li>将自己的域名接入 Cloudflare。</li><li>在 Zero Trust 中创建 Tunnel，复制 Token。</li><li>添加公网主机名，指向 <code>http://127.0.0.1:9876</code>。</li></ol><p class="muted">桌面端负责启动隧道；账号、域名和首次路由需要先完成配置。</p></details>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+      <p class="preview-footnote">试试「会话权限」：更改全局默认，再新建会话；也可以设置单独例外。</p>
+    </section>
+
+    <section id="remote-preview" class="preview-item remote-preview" aria-label="手机和浏览器预览">
+      <div class="preview-caption"><span id="remote-caption">手机端 <span class="caption-dim">/ 当前会话</span></span><span class="caption-dim" id="remote-caption-size">390px</span></div>
+      <div class="remote-frame">
+        <div class="browser-chrome"><span>‹</span><span>›</span><svg class="icon"><use href="#i-refresh"/></svg><div><svg class="icon"><use href="#i-lock"/></svg>terminal.example.com</div><svg class="icon"><use href="#i-more"/></svg></div>
+        <div id="remote-app" class="remote-client">
+          <header class="client-header"><div class="client-brand"><svg class="icon terminal-brand-icon"><use href="#i-terminal"/></svg><span><strong>sTerm</strong><small>DESKTOP · 我的电脑</small></span></div><div class="client-header-actions"><span id="client-connection" class="client-connection"><span class="status-dot green"></span>已连接</span><button id="client-menu" class="touch-button" aria-label="显示与连接选项"><svg class="icon"><use href="#i-more"/></svg></button></div></header>
+          <div class="client-tabbar"><div id="client-current-session" class="client-current-session" aria-live="polite"><span id="client-current-dot" class="status-dot"></span><span id="client-current-title" class="tab-label"></span></div><div id="client-tabs" role="tablist" aria-label="远程会话"></div><button id="all-sessions" class="touch-button" aria-label="切换会话" title="切换会话" aria-haspopup="dialog" aria-expanded="false"><svg class="icon"><use href="#i-list"/></svg></button></div>
+          <div class="client-controlbar"><span id="client-path" title="D:\workspace\sTerm">D:\workspace\sTerm</span><div><span id="control-badge" class="control-badge">只读</span><button id="claim-control" class="small-action" hidden>接管</button><button id="release-control" class="small-action" hidden>归还</button></div></div>
+          <div id="offline-banner" class="offline-banner" hidden><span>连接已断开 · 终端画面已保留</span><button id="reconnect" class="text-button">重新连接</button></div>
+          <div id="terminal-scroll" class="terminal-scroll" tabindex="0" aria-label="终端输出，可滚动查看"><div id="terminal-output" class="terminal-output"></div></div>
+          <div id="terminal-jump" class="terminal-jump" hidden><button id="scroll-bottom">↓ 回到最新输出</button></div>
+          <div id="readonly-hint" class="readonly-hint"><svg class="icon"><use href="#i-lock"/></svg><span id="readonly-description">电脑端尚未允许此会话输入</span></div>
+          <div id="client-input" class="client-input" hidden>
+            <div id="shortcut-bar" class="shortcut-bar"><button data-key="Esc">Esc</button><button data-key="Tab">Tab</button><button id="ctrl-key" aria-pressed="false" title="Ctrl 修饰键">Ctrl</button><button data-key="ArrowUp" aria-label="上方向键"><svg class="icon"><use href="#i-arrow-up"/></svg></button><button data-key="ArrowDown" aria-label="下方向键"><svg class="icon"><use href="#i-arrow-down"/></svg></button><button data-key="ArrowLeft" aria-label="左方向键"><svg class="icon"><use href="#i-arrow-left"/></svg></button><button data-key="ArrowRight" aria-label="右方向键"><svg class="icon"><use href="#i-arrow-right"/></svg></button><button id="more-keys" aria-label="更多快捷键"><svg class="icon"><use href="#i-more"/></svg></button></div>
+            <div class="draft-area"><div class="draft-field"><textarea id="client-draft" rows="2" aria-label="终端输入草稿" placeholder="输入命令或文字，支持中文与多行…" spellcheck="false"></textarea><div class="draft-options"><label><input id="append-enter" type="checkbox" checked>追加回车</label><span>Ctrl ↵ 发送</span></div></div><button id="send-input" class="send-button" title="发送（Ctrl+Enter）" aria-label="发送输入">发送</button></div>
+          </div>
+          <div id="client-sheet-backdrop" class="client-sheet-backdrop" hidden><section class="client-sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title"><div class="sheet-heading"><strong id="sheet-title">所有会话</strong><button id="close-sheet" class="touch-button" aria-label="关闭面板"><svg class="icon"><use href="#i-close"/></svg></button></div><div id="sheet-content"></div></section></div>
+        </div>
+      </div>
+      <p class="preview-footnote">右侧列表切换会话，保留各自草稿。上方可切换「控制中」查看输入区。</p>
+    </section>
+  </main>
+  <div id="prototype-toast" class="prototype-toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

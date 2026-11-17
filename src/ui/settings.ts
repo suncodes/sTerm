@@ -11,6 +11,8 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { OverlaySnapshot } from "../overlay/types";
+import type { RemoteController } from "../remote/controller";
+import { renderRemoteSettings } from "../remote/settings";
 
 const KEY_TAB = "sterm-font-tab";
 const KEY_SIDEBAR = "sterm-font-sidebar";
@@ -63,6 +65,7 @@ export interface SettingsCallbacks {
   /** 终端字号变化（含启动时） */
   onTermFont: (px: number) => void;
   shellId: string;
+  remote: RemoteController;
 }
 
 interface ShellIntegrationStatus {
@@ -92,6 +95,7 @@ function el<K extends keyof HTMLElementTagNameMap>(
 
 export function openSettings(cb: SettingsCallbacks): void {
   if (document.querySelector(".dialog-root")) return;
+  const previousFocus = document.activeElement as HTMLElement | null;
   const f = loadFontSettings();
 
   const root = el("div", "dialog-root");
@@ -115,11 +119,16 @@ export function openSettings(cb: SettingsCallbacks): void {
   document.body.appendChild(root);
 
   let disposePage = (): void => {};
-  const close = (): void => { disposePage(); root.remove(); };
+  const close = (): void => { disposePage(); root.remove(); previousFocus?.focus(); };
   closeBtn.onclick = close;
   root.onclick = (e) => {
     if (e.target === root) close();
   };
+  root.onkeydown = event => { if (event.key === "Escape") { event.stopPropagation(); close(); } };
+  dlg.setAttribute("role", "dialog");
+  dlg.setAttribute("aria-modal", "true");
+  dlg.setAttribute("aria-label", "设置");
+  closeBtn.focus();
 
   /* ---------- 页面：外观（字号） ---------- */
 
@@ -527,6 +536,11 @@ export function openSettings(cb: SettingsCallbacks): void {
   const pages: { id: string; label: string; render: () => HTMLElement }[] = [
     { id: "appearance", label: "外观", render: renderAppearance },
     { id: "overlay", label: "悬浮窗", render: renderOverlay },
+    { id: "remote", label: "远程访问", render: () => {
+      const remote = renderRemoteSettings(cb.remote);
+      disposePage = remote.dispose;
+      return remote.page;
+    } },
     { id: "integrations", label: "集成", render: renderIntegrations },
     { id: "about", label: "关于", render: renderAbout },
   ];
@@ -538,7 +552,7 @@ export function openSettings(cb: SettingsCallbacks): void {
     content.replaceChildren(...pages.filter((pg) => pg.id === id).map((pg) => pg.render()));
   };
   for (const pg of pages) {
-    const item = el("div", "settings-nav-item", pg.label);
+    const item = el("button", "settings-nav-item", pg.label);
     item.dataset.page = pg.id;
     item.onclick = () => select(pg.id);
     nav.appendChild(item);

@@ -1,6 +1,7 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { b64ToU8 } from "../util";
 import { TerminalSession } from "./session";
+import { AGENT_STATUS_LABELS } from "./agentstate";
 import type { AgentName, ShellInfo } from "../types";
 
 interface OutputPayload {
@@ -89,6 +90,7 @@ export class TabManager {
       onCwd: this.opts.onCwd,
       onAgent: this.opts.onAgent,
       onSaveToWorkspace: this.opts.onSaveToWorkspace,
+      onLifecycle: () => this.opts.onSessionsChange?.(this),
       onAgentStatus: (session) => this.handleAgentStatus(session),
       onSidebarToggle: this.opts.onSidebarToggle,
       onNewTab: () => void this.newTab(),
@@ -167,7 +169,7 @@ export class TabManager {
     if (!el) return;
     const st = session.agentState.status;
     const name = session.agentState.agent;
-    const label = { running: "运行中", idle: "空闲", exited: "已退出", none: "" }[st] ?? "";
+    const label = AGENT_STATUS_LABELS[st];
     el.textContent = st !== "none" && name ? `${name} ${label}` : "";
     el.dataset.status = st;
   }
@@ -211,7 +213,7 @@ export class TabManager {
       if (s.agentState.status !== "none") {
         const dot = document.createElement("span");
         dot.className = "tab-state st-" + s.agentState.status;
-        dot.title = { running: "运行中", idle: "任务完成", exited: "已退出", none: "" }[s.agentState.status] ?? "";
+        dot.title = AGENT_STATUS_LABELS[s.agentState.status];
         tab.appendChild(dot);
       }
 

@@ -1,0 +1,18 @@
+{
+  "productName": "sTerm Remote Dev",
+  "identifier": "io.github.suncodes.sterm.remote-dev",
+  "app": {
+    "windows": [{
+      "label": "main",
+      "title": "sTerm Remote Dev",
+      "width": 1100,
+      "height": 700,
+      "minWidth": 800,
+      "minHeight": 500,
+      "theme": "Dark",
+      "decorations": false,
+      "dragDropEnabled": false
+    }]
+  },
+  "bundle": { "active": false }
+}
