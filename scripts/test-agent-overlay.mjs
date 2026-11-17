@@ -52,6 +52,24 @@ test("overlay tracks title, active tab and closed tabs by stable session id", ()
   assert.deepEqual(collectAgentSessions([], undefined), []);
 });
 
+test("overlay keepalive tolerates missing navigator and Web Locks", context => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  context.after(() => {
+    if (original) Object.defineProperty(globalThis, "navigator", original);
+    else delete globalThis.navigator;
+  });
+  for (const browserNavigator of [undefined, {}]) {
+    if (browserNavigator === undefined) delete globalThis.navigator;
+    else Object.defineProperty(globalThis, "navigator", { configurable: true, value: browserNavigator });
+    const keepAlive = new OverlayKeepAlive();
+    assert.doesNotThrow(() => {
+      keepAlive.setEnabled(true);
+      keepAlive.setEnabled(true);
+      keepAlive.setEnabled(false);
+    });
+  }
+});
+
 test("overlay keeps background state processing alive only while enabled", async () => {
   const pending = [];
   Object.defineProperty(globalThis, "navigator", { configurable: true, value: {

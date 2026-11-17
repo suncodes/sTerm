@@ -4,6 +4,10 @@ All notable changes to sTerm are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Skip optional background keepalive when navigator or Web Locks is unavailable, so remote controller tests also run on Node.js 20.
+
 ## [0.2.2] - 2026-11-17
 
 ### Added

@@ -8,10 +8,11 @@ export class OverlayKeepAlive {
       this.release = undefined;
       return;
     }
-    if (this.release || !navigator.locks) return;
+    const locks = globalThis.navigator?.locks;
+    if (this.release || !locks) return;
     // 多个 sTerm 实例可同时持有；关闭前已创建的 Promise 也能正常释放。
     const held = new Promise<void>((resolve) => { this.release = resolve; });
-    void navigator.locks.request("sterm-agent-overlay", { mode: "shared" }, () => held)
+    void locks.request("sterm-agent-overlay", { mode: "shared" }, () => held)
       .catch((error) => console.error("悬浮窗后台状态保持失败", error));
   }
 }
