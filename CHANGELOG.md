@@ -4,6 +4,8 @@ All notable changes to sTerm are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-17
+
 ### Added
 
 - Add optional QR-paired remote viewing and single-controller input for explicitly shared terminal sessions.
@@ -11,6 +13,11 @@ All notable changes to sTerm are documented in this file.
 - Add an isolated remote development configuration and focused remote gateway, terminal-mirror, and credential tests.
 - Move remote access into Settings with connection, permissions, and public-tunnel sections; add saved sharing defaults, per-session exceptions, and device revocation.
 - Match the remote browser UI to the desktop theme, with a mobile session drawer, wide-screen tabs, per-session drafts, shortcut panels, and a fixed rectangular text send button.
+- Add browser-local remote input history with search, deduplication, deletion, and draft recall with undo; keep the latest 100 entries without automatically executing recalled input.
+
+### Fixed
+
+- Prevent orphaned tunnel agents with Windows process jobs, scoped cleanup, confirmed stop, and per-directory locks; reuse repeated connections and enable ngrok dashboard Stop.
 
 ## [0.2.1] - 2026-11-13
 

@@ -5,11 +5,12 @@ use std::{
     fs, io::{BufRead, BufReader, Cursor, Read},
     os::windows::process::CommandExt,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     sync::Mutex,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager};
+use crate::tunnel_process::{self, TunnelProcess};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -42,8 +43,9 @@ struct SavedConfig {
 
 #[derive(Default)]
 struct Inner {
-    child: Option<Child>,
+    child: Option<TunnelProcess>,
     generation: u64,
+    failure: Option<String>,
     status: TunnelStatus,
 }
 
@@ -53,15 +55,31 @@ pub struct TunnelState {
     operation: tokio::sync::Mutex<()>,
 }
 
-impl TunnelState {
-    pub fn stop(&self) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.generation += 1;
-        if let Some(mut child) = inner.child.take() {
-            let _ = child.kill();
-            std::thread::spawn(move || { let _ = child.wait(); });
+impl Inner {
+    fn reuse(&mut self, provider: &Provider, port: u16) -> Result<Option<TunnelStatus>, String> {
+        let Some(process) = self.child.as_mut() else { return Ok(None); };
+        if process.child.try_wait().map_err(|_| "无法查询现有公网组件状态，请先断开连接")?.is_some() {
+            self.child.take();
+            self.status = TunnelStatus::default();
+            self.failure = None;
+            return Ok(None);
         }
+        if self.status.provider.as_ref() == Some(provider) && process.port == port {
+            return Ok(Some(self.status.clone()));
+        }
+        Err("请先停止现有公网连接".into())
+    }
+}
+
+impl TunnelState {
+    pub fn stop(&self) -> Result<(), String> {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(process) = inner.child.as_mut() { process.stop()?; }
+        inner.generation += 1;
+        inner.child.take();
         inner.status = TunnelStatus::default();
+        inner.failure = None;
+        Ok(())
     }
 }
 
@@ -211,17 +229,37 @@ pub async fn tunnel_install(app: AppHandle, provider: Provider) -> Result<(), St
     Ok(())
 }
 
+fn ngrok_failure(line: &str) -> Option<String> {
+    let (_, suffix) = line.split_once("ERR_NGROK_")?;
+    let number: String = suffix.chars().take_while(char::is_ascii_digit).take(12).collect();
+    if number.is_empty() { return None; }
+    Some(if number == "108" {
+        "ngrok 在线 agent 会话额度已满（ERR_NGROK_108）。请清理遗留连接；其他设备的会话可在 dashboard.ngrok.com/agents 管理。".into()
+    } else {
+        format!("ngrok 连接失败（ERR_NGROK_{number}），请检查凭证、账号额度及网络。")
+    })
+}
+
 fn observe_line(app: &AppHandle, generation: u64, line: &str) {
     let state = app.state::<TunnelState>();
     let mut inner = state.inner.lock().unwrap();
     if inner.generation != generation { return; }
     let is_ngrok = inner.status.provider == Some(Provider::Ngrok);
+    if let Some(message) = is_ngrok.then(|| ngrok_failure(line)).flatten() {
+        inner.status.connected = false;
+        inner.status.public_url = None;
+        inner.status.message = message.clone();
+        inner.failure = Some(message);
+        if let Some(hub) = app.state::<crate::remote::RemoteState>().current() { hub.set_public_origin(None); }
+        return;
+    }
     if let Ok(value) = serde_json::from_str::<Value>(line) {
         if is_ngrok {
             if let Some(url) = value["url"].as_str().and_then(|value| public_origin(value).ok()) {
                 inner.status.public_url = Some(url);
                 inner.status.connected = true;
                 inner.status.message = "公网已连接".into();
+                inner.failure = None;
             }
         } else if value["message"].as_str().is_some_and(|message| message.contains("Registered tunnel connection")) {
             inner.status.connected = true;
@@ -242,12 +280,14 @@ pub fn tunnel_start(app: AppHandle, provider: Provider) -> Result<TunnelStatus, 
     let _operation = state.operation.try_lock().map_err(|_| "公网组件操作进行中，请稍后重试")?;
     let hub = app.state::<crate::remote::RemoteState>().current().ok_or("请先开启远程服务")?;
     let port = crate::remote::remote_port(&hub);
+    let mut inner = state.inner.lock().unwrap();
+    if let Some(status) = inner.reuse(&provider, port)? { return Ok(status); }
+    hub.set_public_origin(None);
     let dir = directory(&app)?;
+    let lease = tunnel_process::lease(&dir)?;
+    tunnel_process::cleanup_orphans(&dir)?;
     if !installed(&dir, &provider) { return Err("请先下载或重新校验公网组件".into()); }
     let credential = read_credential(&dir, &provider)?;
-    let state = app.state::<TunnelState>();
-    let mut inner = state.inner.lock().unwrap();
-    if inner.child.is_some() { return Err("请先停止现有公网连接".into()); }
     let mut command = Command::new(dir.join(provider.executable()));
     command.creation_flags(0x0800_0000).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let public_url = if provider == Provider::Cloudflare {
@@ -258,15 +298,15 @@ pub fn tunnel_start(app: AppHandle, provider: Provider) -> Result<TunnelStatus, 
         Some(url)
     } else {
         let config = dir.join("ngrok.yml");
-        crate::storage::write(&config, b"version: 3\nagent:\n  web_addr: false\n  remote_management: false\n  update_check: false\n", false)?;
+        crate::storage::write(&config, b"version: 3\nagent:\n  web_addr: false\n  remote_management: true\n  update_check: false\n", false)?;
         command.args(["http", &format!("http://127.0.0.1:{port}"), "--log", "stdout", "--log-format", "json", "--inspect=false", "--config"])
             .arg(config).env("NGROK_AUTHTOKEN", &credential);
         None
     };
-    let mut child = command.spawn().map_err(|_| "启动隧道组件失败，请检查组件是否被系统拦截")?;
+    let mut process = TunnelProcess::spawn(&mut command, lease, port)?;
     inner.generation += 1;
     let generation = inner.generation;
-    for stream in [child.stdout.take().map(|stream| Box::new(stream) as Box<dyn Read + Send>), child.stderr.take().map(|stream| Box::new(stream) as Box<dyn Read + Send>)].into_iter().flatten() {
+    for stream in [process.child.stdout.take().map(|stream| Box::new(stream) as Box<dyn Read + Send>), process.child.stderr.take().map(|stream| Box::new(stream) as Box<dyn Read + Send>)].into_iter().flatten() {
         let reader_app = app.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stream).lines().map_while(Result::ok) {
@@ -274,26 +314,43 @@ pub fn tunnel_start(app: AppHandle, provider: Provider) -> Result<TunnelStatus, 
             }
         });
     }
-    inner.child = Some(child);
+    inner.child = Some(process);
+    inner.failure = None;
     inner.status = TunnelStatus { provider: Some(provider), running: true, connected: false, public_url, message: "正在连接公网…".into() };
     let status = inner.status.clone();
     drop(inner);
     let monitor_app = app.clone();
     tauri::async_runtime::spawn(async move {
+        let started = Instant::now();
+        let mut connected_once = false;
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
             let state = monitor_app.state::<TunnelState>();
             let mut inner = state.inner.lock().unwrap();
             if inner.generation != generation { break; }
-            let ended = inner.child.as_mut().is_some_and(|child| child.try_wait().is_ok_and(|status| status.is_some()));
-            if ended {
-                inner.child.take();
-                inner.status.running = false;
-                inner.status.connected = false;
-                inner.status.message = "公网连接已退出，请检查凭证、账号额度及网络后重试".into();
-                if let Some(hub) = monitor_app.state::<crate::remote::RemoteState>().current() { hub.set_public_origin(None); }
-                break;
+            let ended = inner.child.as_mut().is_some_and(|process| process.child.try_wait().is_ok_and(|status| status.is_some()));
+            connected_once |= inner.status.connected;
+            let timed_out = !connected_once && started.elapsed() >= Duration::from_secs(45);
+            let rejected = inner.failure.is_some();
+            if !ended && !timed_out && !rejected { continue; }
+            if !ended {
+                if let Some(process) = inner.child.as_mut() {
+                    if let Err(error) = process.stop() { inner.status.message = error; continue; }
+                }
             }
+            inner.child.take();
+            inner.status.running = false;
+            inner.status.connected = false;
+            inner.status.public_url = None;
+            if let Some(message) = inner.failure.take() {
+                inner.status.message = message;
+            } else {
+                inner.status.message = if timed_out {
+                    "公网连接超时，已停止组件。请检查网络及账号额度后重试。".into()
+                } else { "公网连接已退出，请检查凭证、账号额度及网络后重试".into() };
+            }
+            if let Some(hub) = monitor_app.state::<crate::remote::RemoteState>().current() { hub.set_public_origin(None); }
+            break;
         }
     });
     Ok(status)
@@ -303,9 +360,24 @@ pub fn tunnel_start(app: AppHandle, provider: Provider) -> Result<TunnelStatus, 
 pub fn tunnel_status(state: tauri::State<TunnelState>) -> TunnelStatus { state.inner.lock().unwrap().status.clone() }
 
 #[tauri::command]
-pub fn tunnel_stop(app: AppHandle) {
-    app.state::<TunnelState>().stop();
+pub fn tunnel_stop(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<TunnelState>();
+    let _operation = state.operation.try_lock().map_err(|_| "公网组件操作进行中，请稍后重试")?;
+    state.stop()?;
     if let Some(hub) = app.state::<crate::remote::RemoteState>().current() { hub.set_public_origin(None); }
+    let dir = directory(&app)?;
+    let _lease = tunnel_process::lease(&dir)?;
+    tunnel_process::cleanup_orphans(&dir)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn tunnel_cleanup(app: AppHandle) -> Result<usize, String> {
+    let state = app.state::<TunnelState>();
+    let _operation = state.operation.try_lock().map_err(|_| "公网组件操作进行中，请稍后重试")?;
+    let dir = directory(&app)?;
+    let _lease = tunnel_process::lease(&dir)?;
+    tunnel_process::cleanup_orphans(&dir)
 }
 
 #[tauri::command]
@@ -356,6 +428,39 @@ mod tests {
         for invalid in ["http://example.com", "https://a:b@example.com", "https://example.com/path", "https://example.com/#token", "https://example.com:123"] {
             assert!(public_origin(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn repeated_starts_reuse_the_same_live_agent_and_stop_releases_it() {
+        use crate::{storage::tests::TempDir, tunnel_process::tests::{ping_executable, sleeper}};
+        let dir = TempDir::new();
+        let process = TunnelProcess::spawn(&mut sleeper(ping_executable()), tunnel_process::lease(dir.path()).unwrap(), 8765).unwrap();
+        let pid = process.child.id();
+        let state = TunnelState::default();
+        {
+            let mut inner = state.inner.lock().unwrap();
+            inner.child = Some(process);
+            inner.status = TunnelStatus { provider: Some(Provider::Ngrok), running: true, ..TunnelStatus::default() };
+            for _ in 0..10 {
+                assert!(inner.reuse(&Provider::Ngrok, 8765).unwrap().unwrap().running);
+                assert_eq!(inner.child.as_ref().unwrap().child.id(), pid);
+            }
+            assert!(inner.reuse(&Provider::Cloudflare, 8765).is_err());
+            assert!(inner.reuse(&Provider::Ngrok, 8766).is_err());
+        }
+        state.stop().unwrap();
+        state.stop().unwrap();
+        assert!(state.inner.lock().unwrap().child.is_none());
+        assert!(tunnel_process::lease(dir.path()).is_ok());
+    }
+
+    #[test]
+    fn ngrok_errors_report_limits_without_echoing_credentials() {
+        let failure = ngrok_failure(r#"{"err":"authentication failed: ERR_NGROK_108 secret-not-for-display"}"#).unwrap();
+        assert!(failure.contains("会话额度已满"));
+        assert!(!failure.contains("secret-not-for-display"));
+        assert!(ngrok_failure("ERR_NGROK_3200").unwrap().contains("ERR_NGROK_3200"));
+        assert!(ngrok_failure(r#"{"msg":"started tunnel","url":"https://example.ngrok-free.app"}"#).is_none());
     }
 
     #[test]

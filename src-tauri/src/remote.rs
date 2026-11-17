@@ -573,9 +573,10 @@ pub fn remote_pair(state: tauri::State<RemoteState>, origin: String) -> Result<V
 }
 
 #[tauri::command]
-pub fn remote_stop(app: AppHandle) {
-    app.state::<crate::tunnel::TunnelState>().stop();
+pub fn remote_stop(app: AppHandle) -> Result<(), String> {
+    app.state::<crate::tunnel::TunnelState>().stop()?;
     app.state::<RemoteState>().stop();
+    Ok(())
 }
 
 #[tauri::command]

@@ -4,6 +4,8 @@ import { Terminal } from "@xterm/xterm";
 import { terminalKey, terminalInput, type SharedSession } from "./types";
 import { TerminalMirror } from "./mirror";
 import { AGENT_STATUS_LABELS } from "../terminal/agentstate";
+import { InputHistory, INPUT_HISTORY_KEY } from "./history";
+import { HistoryPanel } from "./historypanel";
 
 const element = <ElementType extends HTMLElement>(id: string): ElementType => document.getElementById(id) as ElementType;
 const app = element("remote-app");
@@ -26,6 +28,9 @@ const terminal = new Terminal({
 terminal.open(element("screen"));
 const mirror = new TerminalMirror(terminal, updateSize);
 const drafts = new Map<string, string>();
+const undoDrafts = new Map<string, string>();
+const inputHistory = new InputHistory();
+const historyPanel = new HistoryPanel(element("history-panel"), inputHistory, recallHistory);
 
 let socket: WebSocket | undefined;
 let retryTimer: number | undefined;
@@ -95,6 +100,10 @@ function syncControls(): void {
     : current.allowControl ? "点击右上方「接管」后即可输入" : "电脑端尚未允许此会话输入";
   element<HTMLButtonElement>("send").disabled = !controls || !draft.value;
   draft.disabled = !controls;
+  element<HTMLButtonElement>("open-history").disabled = !controls;
+  element("draft-undo").hidden = !current || !undoDrafts.has(sessionKey(current));
+  element<HTMLButtonElement>("undo-history").disabled = !controls;
+  historyPanel.setCanRecall(controls);
   element<HTMLInputElement>("append-enter").disabled = !controls;
   document.querySelectorAll<HTMLButtonElement>("#keys button, #extra-keys button").forEach(button => { button.disabled = !controls; });
   element("empty-screen").hidden = Boolean(current);
@@ -199,6 +208,7 @@ function roster(list: SharedSession[]): void {
   shared = list;
   const selected = current && shared.find(session => sessionKey(session) === sessionKey(current!));
   for (const key of drafts.keys()) if (!shared.some(session => sessionKey(session) === key)) drafts.delete(key);
+  for (const key of undoDrafts.keys()) if (!shared.some(session => sessionKey(session) === key)) undoDrafts.delete(key);
   if (!shared.length) {
     current = undefined; draft.value = "";
     attachedKey = "";
@@ -300,22 +310,41 @@ function input(data: string): boolean {
   return true;
 }
 function submit(): void {
-  if (!draft.value) return;
-  if (input(terminalInput(draft.value, element<HTMLInputElement>("append-enter").checked, terminal.modes.bracketedPasteMode))) {
+  if (!draft.value || !current) return;
+  const text = draft.value;
+  if (input(terminalInput(text, element<HTMLInputElement>("append-enter").checked, terminal.modes.bracketedPasteMode))) {
+    inputHistory.record(text, current.title);
+    undoDrafts.delete(sessionKey(current));
     draft.value = "";
     rememberDraft();
     syncControls();
   }
 }
-function openSheet(name: "sessions" | "keys" | "display"): void {
+function recallHistory(text: string): void {
+  if (!current || !ownsControl()) return;
+  const key = sessionKey(current);
+  if (draft.value !== text) {
+    if (!undoDrafts.has(key)) undoDrafts.set(key, draft.value);
+    draft.value = text;
+    rememberDraft();
+  }
+  closeSheet();
+  syncControls();
+  draft.focus();
+  draft.setSelectionRange(draft.value.length, draft.value.length);
+}
+function openSheet(name: "sessions" | "keys" | "display" | "history"): void {
   if (backdrop.hidden) sheetFocus = document.activeElement as HTMLElement | null;
   backdrop.dataset.sheet = name;
-  element("sheet-title").textContent = name === "sessions" ? "所有会话 · " + shared.length : name === "keys" ? "更多快捷键" : "显示与连接";
+  element("sheet-title").textContent = name === "sessions" ? "所有会话 · " + shared.length : name === "keys" ? "更多快捷键" : name === "history" ? "历史命令" : "显示与连接";
   element("session-list").hidden = name !== "sessions";
   element("extra-keys").hidden = name !== "keys";
   element("display-options").hidden = name !== "display";
+  element("history-panel").hidden = name !== "history";
+  if (name === "history") historyPanel.render();
   backdrop.hidden = false;
   element("all-sessions").setAttribute("aria-expanded", String(name === "sessions"));
+  element("open-history").setAttribute("aria-expanded", String(name === "history"));
   for (const child of app.children) if (child instanceof HTMLElement && child !== backdrop) child.inert = true;
   const selected = name === "sessions" ? element("session-list").querySelector<HTMLButtonElement>('[aria-current="true"]') : null;
   (selected ?? element("close-sheet")).focus();
@@ -323,6 +352,7 @@ function openSheet(name: "sessions" | "keys" | "display"): void {
 function closeSheet(): void {
   backdrop.hidden = true;
   element("all-sessions").setAttribute("aria-expanded", "false");
+  element("open-history").setAttribute("aria-expanded", "false");
   for (const child of app.children) if (child instanceof HTMLElement) child.inert = false;
   if (sheetFocus?.getClientRects().length && !sheetFocus.closest("[hidden]")) sheetFocus.focus();
   else scroll.focus();
@@ -351,6 +381,20 @@ element("display-menu").onclick = () => openSheet("display");
 element("more-keys").onclick = () => openSheet("keys");
 element("close-sheet").onclick = closeSheet;
 element("menu-sessions").onclick = () => openSheet("sessions");
+element("open-history").onclick = () => openSheet("history");
+element("menu-history").onclick = () => openSheet("history");
+element("undo-history").onclick = () => {
+  if (!current || !ownsControl()) return;
+  const key = sessionKey(current);
+  const previous = undoDrafts.get(key);
+  if (previous === undefined) return;
+  draft.value = previous;
+  undoDrafts.delete(key);
+  rememberDraft();
+  syncControls();
+  draft.focus();
+  draft.setSelectionRange(draft.value.length, draft.value.length);
+};
 element("menu-reconnect").onclick = () => { closeSheet(); connect(); };
 element("reconnect").onclick = connect;
 backdrop.onclick = event => { if (event.target === backdrop) closeSheet(); };
@@ -376,7 +420,11 @@ element("session-tabs").onkeydown = event => {
 element("claim").onclick = () => { if (current && screenReady) send({ type: "claim", id: current.id, generation: current.generation }); };
 element("release").onclick = () => { if (current) send({ type: "release", id: current.id, generation: current.generation }); };
 element("send").onclick = submit;
-draft.oninput = () => { rememberDraft(); element<HTMLButtonElement>("send").disabled = !ownsControl() || !draft.value; };
+draft.oninput = () => {
+  if (current) undoDrafts.delete(sessionKey(current));
+  rememberDraft();
+  syncControls();
+};
 draft.onkeydown = event => {
   if (event.key === "Enter" && event.ctrlKey && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); submit(); }
 };
@@ -412,6 +460,11 @@ window.visualViewport?.addEventListener("resize", viewport);
 window.addEventListener("resize", viewport);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && !connected() && !revoked) connect();
+});
+window.addEventListener("storage", event => {
+  if (event.key !== INPUT_HISTORY_KEY && event.key !== null) return;
+  inputHistory.reload();
+  if (!backdrop.hidden && backdrop.dataset.sheet === "history") historyPanel.render();
 });
 
 async function start(): Promise<void> {

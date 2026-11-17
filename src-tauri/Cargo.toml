@@ -1,6 +1,6 @@
 [package]
 name = "sterm"
-version = "0.2.1"
+version = "0.2.2"
 description = "sTerm - a lightweight local terminal for Windows"
 edition = "2021"
 license = "Apache-2.0"
@@ -30,6 +30,9 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 sha2 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 if-addrs = "0.13"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 
 [dev-dependencies]
 tokio-tungstenite = "0.29"

@@ -6,6 +6,7 @@ mod overlay;
 mod pty;
 mod remote;
 mod tunnel;
+mod tunnel_process;
 mod paths;
 mod storage;
 mod win_cwd;
@@ -538,7 +539,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             // 仅主窗口销毁时结束终端与应用；关闭悬浮窗不会触发会话清理。
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
-                window.app_handle().state::<tunnel::TunnelState>().stop();
+                let _ = window.app_handle().state::<tunnel::TunnelState>().stop();
                 window.app_handle().state::<remote::RemoteState>().stop();
                 if let Some(state) = window.app_handle().try_state::<AppState>() {
                     state.ptys.kill_all();
@@ -563,6 +564,7 @@ pub fn run() {
             tunnel::tunnel_start,
             tunnel::tunnel_status,
             tunnel::tunnel_stop,
+            tunnel::tunnel_cleanup,
             tunnel::tunnel_cloudflare_setup,
             overlay::overlay_init,
             overlay::overlay_snapshot,

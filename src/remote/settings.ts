@@ -33,7 +33,7 @@ export function renderRemoteSettings(controller: RemoteController): { page: HTML
       <div class="rs-public-heading"><span class="settings-label">公网连接</span><span data-el="tunnel-state" class="rs-state off">未连接</span></div><div class="rs-segment rs-providers"><button data-provider="cloudflare" aria-pressed="true">Cloudflare Tunnel</button><button data-provider="ngrok" aria-pressed="false">ngrok</button></div><p data-el="provider-hint" class="rs-provider-hint"></p>
       <label class="rs-field-label" for="remote-token" data-el="token-label">Tunnel Token</label><input id="remote-token" data-el="token" class="rs-field rs-full" type="password" autocomplete="new-password">
       <div data-el="domain-row"><label class="rs-field-label" for="remote-domain">公网域名</label><input id="remote-domain" data-el="domain" class="rs-field rs-full" placeholder="terminal.example.com" autocomplete="off"></div>
-      <div class="rs-public-actions"><button data-el="connect" class="settings-integration-btn rs-primary">连接 Cloudflare</button><button data-el="save" class="settings-integration-btn">保存配置</button></div><p data-el="tunnel-message" class="rs-muted rs-tunnel-message">未连接时仍可使用局域网二维码</p>
+      <div class="rs-public-actions"><button data-el="connect" class="settings-integration-btn rs-primary">连接 Cloudflare</button><button data-el="save" class="settings-integration-btn">保存配置</button><button data-el="cleanup" class="settings-integration-btn" hidden>清理遗留连接</button></div><p data-el="tunnel-message" class="rs-muted rs-tunnel-message">未连接时仍可使用局域网二维码</p>
       <details data-el="help" class="rs-advanced"><summary data-el="help-title">首次使用 Cloudflare</summary><ol data-el="help-steps"></ol></details>
       <details data-el="auto-setup" class="rs-advanced"><summary>自动创建 Cloudflare 隧道与 DNS</summary><p class="rs-muted">需有已激活域名。API Token 需具备 Zone Read、DNS Edit、Cloudflare Tunnel Edit 权限；仅创建新记录。</p><label class="rs-field-label" for="remote-api-token">Cloudflare API Token</label><input id="remote-api-token" data-el="api-token" class="rs-field rs-full" type="password" autocomplete="new-password"><label class="rs-field-label" for="remote-hostname">专用主机名</label><input id="remote-hostname" data-el="hostname" class="rs-field rs-full" placeholder="terminal.example.com"><button data-el="setup" class="settings-integration-btn">创建隧道与 DNS</button></details>
     </div><div data-el="result" class="settings-error" role="status"></div>`;
@@ -169,6 +169,8 @@ export function renderRemoteSettings(controller: RemoteController): { page: HTML
     }
     const isCloudflare = provider === "cloudflare";
     page.querySelectorAll<HTMLButtonElement>("[data-provider]").forEach(button => { button.setAttribute("aria-pressed", String(button.dataset.provider === provider)); button.disabled = busy || tunnel.running; });
+    find("cleanup").hidden = isCloudflare;
+    find<HTMLButtonElement>("cleanup").disabled = busy || tunnel.running;
     find("domain-row").hidden = !isCloudflare;
     find("auto-setup").hidden = !isCloudflare;
     find("provider-hint").textContent = isCloudflare ? "适合日常使用，通过自己的域名访问。" : "适合快速测试，连接后自动获取 ngrok 公网地址。";
@@ -238,6 +240,12 @@ export function renderRemoteSettings(controller: RemoteController): { page: HTML
   find("revoke").onclick = () => void operation(async () => { await invoke("remote_revoke_clients"); find("devices").hidden = true; await generateQr(); });
   page.querySelectorAll<HTMLButtonElement>("[data-provider]").forEach(button => { button.onclick = () => { provider = button.dataset.provider as typeof provider; token.value = ""; render(); }; });
   find("save").onclick = () => void operation(saveTunnel);
+  find("cleanup").onclick = () => void operation(async () => {
+    const count = await invoke<number>("tunnel_cleanup");
+    find("result").textContent = count
+      ? `已清理 ${count} 个遗留进程，ngrok 云端状态同步可能稍有延迟。`
+      : "未发现本版本的遗留连接；其他设备或版本的会话请在 ngrok 控制台管理。";
+  });
   find("connect").onclick = () => void operation(async () => {
     if (tunnel.running) { await invoke("tunnel_stop"); return; }
     await saveTunnel();
