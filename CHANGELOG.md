@@ -4,6 +4,12 @@ All notable changes to sTerm are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-11-18
+
+### Added
+
+- Add remote Backspace and Delete keys, move Enter to the main toolbar, and support holding deletion and arrow keys with cancellation on release, control changes, and disconnect; keep all keys visible in a compact two-row mobile layout.
+
 ## [0.2.3] - 2026-11-18
 
 ### Added

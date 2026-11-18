@@ -69,6 +69,9 @@ button:disabled { opacity: .45; cursor: default; }
 #keys > button { flex: 1 0 44px; min-width: 44px; min-height: 44px; background: transparent; border: 0; border-radius: 4px; color: #d2d2dc; font-size: 11px; padding: 0 5px; }
 #keys > button[aria-pressed=true] { color: #e0edff; background: #45608c; box-shadow: inset 0 0 0 1px #6c8dbc; }
 #keys .icon { width: 14px; height: 14px; }
+#keys > button { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+#keys > button[data-key] { touch-action: none; }
+#keys > button[data-held=true], #keys > button:active:not(:disabled) { background: #45454d; }
 .draft-area { display: flex; align-items: flex-end; padding: 10px; gap: 8px; }
 .draft-field { flex: 1; min-width: 0; border: 1px solid #55555f; background: #252529; border-radius: 4px; overflow: hidden; }
 .draft-field:focus-within { border-color: #8aa6d1; box-shadow: 0 0 0 1px #8aa6d1; }
@@ -137,6 +140,11 @@ button:disabled { opacity: .45; cursor: default; }
   .draft-area { padding: 10px 16px 12px; }
   #draft { font-size: 13px; min-height: 54px; }
   .client-sheet { width: 390px; margin-left: auto; border-left: 1px solid #55555f; }
+}
+@media (max-width: 540px) {
+  #keys { display: grid; grid-template-columns: repeat(6, minmax(44px, 1fr)); }
+  #keys > button { min-width: 0; }
+  #more-keys { grid-column: span 2; }
 }
 @media (max-height: 550px) {
   .client-header { min-height: 44px; padding-top: 0; padding-bottom: 0; }

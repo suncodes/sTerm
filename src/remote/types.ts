@@ -43,7 +43,7 @@ export interface TunnelConfig {
 export const REMOTE_KEYS: Record<string, string> = {
   ctrlC: "\x03", escape: "\x1b", tab: "\t", up: "\x1b[A", down: "\x1b[B",
   left: "\x1b[D", right: "\x1b[C", enter: "\r", ctrlD: "\x04", ctrlL: "\x0c",
-  shiftTab: "\x1b[Z", home: "\x1b[H", end: "\x1b[F", pageUp: "\x1b[5~", pageDown: "\x1b[6~",
+  backspace: "\x7f", delete: "\x1b[3~", shiftTab: "\x1b[Z", home: "\x1b[H", end: "\x1b[F", pageUp: "\x1b[5~", pageDown: "\x1b[6~",
 };
 
 export function terminalInput(draft: string, appendEnter: boolean, bracketedPaste = false): string {

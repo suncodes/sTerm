@@ -7,10 +7,10 @@ const require = createRequire(import.meta.url);
 const { Terminal } = require("@xterm/headless");
 const { SerializeAddon } = require("@xterm/addon-serialize");
 const bundle = await build({
-  stdin: { contents: 'export * from "./src/remote/types"; export * from "./src/remote/pending"; export * from "./src/remote/mirror"; export * from "./src/remote/permissions"; export * from "./src/remote/history";', resolveDir: process.cwd() },
+  stdin: { contents: 'export * from "./src/remote/types"; export * from "./src/remote/pending"; export * from "./src/remote/mirror"; export * from "./src/remote/permissions"; export * from "./src/remote/history"; export * from "./src/remote/keyrepeat";', resolveDir: process.cwd() },
   bundle: true, write: false, format: "esm", platform: "node",
 });
-const { terminalInput, terminalKey, REMOTE_KEYS, PendingTerminalSequence, TerminalMirror, resolveRemotePermission, readRemoteDefaults, InputHistory, INPUT_HISTORY_KEY } = await import(
+const { terminalInput, terminalKey, REMOTE_KEYS, PendingTerminalSequence, TerminalMirror, resolveRemotePermission, readRemoteDefaults, InputHistory, INPUT_HISTORY_KEY, KeyRepeat } = await import(
   "data:text/javascript;base64," + Buffer.from(bundle.outputFiles[0].contents).toString("base64")
 );
 const write = (terminal, text) => new Promise(resolve => terminal.write(text, resolve));
@@ -128,7 +128,49 @@ test("shortcut modifiers preserve application cursor mode and control sequences"
   assert.equal(terminalKey("ctrlD"), "\x04");
   assert.equal(terminalKey("ctrlL"), "\x0c");
   assert.equal(terminalKey("pageDown"), "\x1b[6~");
+  assert.equal(terminalKey("backspace"), "\x7f");
+  assert.equal(terminalKey("delete"), "\x1b[3~");
+  assert.equal(terminalKey("enter"), "\r");
   assert.equal(terminalKey("unknown"), "");
+});
+
+test("held keys send once immediately, repeat after a delay, and stop without an extra release key", context => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const repeat = new KeyRepeat();
+  let presses = 0;
+  const press = () => { presses++; return true; };
+  repeat.start(press);
+  assert.equal(presses, 1);
+  context.mock.timers.tick(399);
+  assert.equal(presses, 1);
+  repeat.stop();
+  context.mock.timers.tick(1000);
+  assert.equal(presses, 1);
+  repeat.start(press);
+  context.mock.timers.tick(400);
+  assert.equal(presses, 3);
+  context.mock.timers.tick(75);
+  assert.equal(presses, 4);
+  repeat.stop();
+  context.mock.timers.tick(1000);
+  assert.equal(presses, 4);
+});
+
+test("changing held keys, failed sends and control cancellation leave no queued repeats", context => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const repeat = new KeyRepeat();
+  const presses = [];
+  repeat.start(() => { presses.push("old"); return true; });
+  repeat.start(() => { presses.push("new"); return presses.length < 3; });
+  context.mock.timers.tick(400);
+  context.mock.timers.tick(1000);
+  assert.deepEqual(presses, ["old", "new", "new"]);
+  repeat.start(() => { presses.push("denied"); return false; });
+  context.mock.timers.tick(1000);
+  assert.equal(presses.filter(key => key === "denied").length, 1);
+  repeat.start(() => { presses.push("cancelled"); repeat.stop(); return true; });
+  context.mock.timers.tick(1000);
+  assert.equal(presses.filter(key => key === "cancelled").length, 1);
 });
 
 const controllerBundle = await build({
