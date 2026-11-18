@@ -21,6 +21,7 @@ export interface RemoteStatus {
   origins: string[];
   sessions: SharedSession[];
   clients: number;
+  passwordEnabled: boolean;
 }
 
 export interface TunnelStatus {

@@ -4,9 +4,11 @@ All notable changes to sTerm are documented in this file.
 
 ## [Unreleased]
 
-### Fixed
+## [0.2.3] - 2026-11-18
 
-- Skip optional background keepalive when navigator or Web Locks is unavailable, so remote controller tests also run on Node.js 20.
+### Added
+
+- Add optional six-digit HTTPS remote access code login alongside QR pairing, with single-entry setup, desktop show/hide/copy controls, Windows-protected recoverable storage and salted verification, 30-day browser authorization, revocation, and rate limits; preserve login with legacy hash-only records until reset.
 
 ## [0.2.2] - 2026-11-17
 
@@ -21,6 +23,7 @@ All notable changes to sTerm are documented in this file.
 
 ### Fixed
 
+- Skip optional background keepalive when navigator or Web Locks is unavailable, so remote controller tests also run on Node.js 20.
 - Prevent orphaned tunnel agents with Windows process jobs, scoped cleanup, confirmed stop, and per-directory locks; reuse repeated connections and enable ngrok dashboard Stop.
 
 ## [0.2.1] - 2026-11-13

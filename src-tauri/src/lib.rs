@@ -5,10 +5,12 @@ mod events;
 mod overlay;
 mod pty;
 mod remote;
+mod remote_password;
 mod tunnel;
 mod tunnel_process;
 mod paths;
 mod storage;
+mod secure;
 mod win_cwd;
 mod workspaces;
 
@@ -552,6 +554,9 @@ pub fn run() {
             remote::remote_start,
             remote::remote_status,
             remote::remote_pair,
+            remote::remote_password_config,
+            remote::remote_password_reveal,
+            remote::remote_password_save,
             remote::remote_stop,
             remote::remote_share,
             remote::remote_publish,

@@ -17,9 +17,11 @@ use std::{
 };
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{broadcast, Notify};
+use crate::remote_password::{self, LoginLimiter, PasswordVerifier};
 
 const PAIR_LIFETIME: Duration = Duration::from_secs(300);
 const CLIENT_LIFETIME: Duration = Duration::from_secs(12 * 60 * 60);
+const PASSWORD_CLIENT_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const MAX_CLIENTS: usize = 8;
 const MAX_SNAPSHOT: usize = 2 * 1024 * 1024;
 
@@ -98,6 +100,9 @@ struct Inner {
     connected: HashSet<String>,
     sessions: HashMap<u32, SharedSession>,
     attempts: HashMap<IpAddr, (Instant, u32)>,
+    password: Option<PasswordVerifier>,
+    auth_generation: u64,
+    login_limiter: LoginLimiter,
 }
 
 pub struct RemoteHub {
@@ -107,6 +112,7 @@ pub struct RemoteHub {
     host: Arc<dyn RemoteHost>,
     stopped: AtomicBool,
     shutdown: Notify,
+    password_checks: Arc<tokio::sync::Semaphore>,
 }
 
 #[derive(Clone, Serialize)]
@@ -117,6 +123,7 @@ pub struct RemoteStatus {
     pub origins: Vec<String>,
     pub sessions: Vec<SharedSession>,
     pub clients: usize,
+    pub password_enabled: bool,
 }
 
 impl RemoteHub {
@@ -126,8 +133,10 @@ impl RemoteHub {
             inner: Mutex::new(Inner {
                 port, origins, pairs: HashMap::new(), clients: HashMap::new(),
                 connected: HashSet::new(), sessions: HashMap::new(), attempts: HashMap::new(),
+                password: None, auth_generation: 0, login_limiter: LoginLimiter::default(),
             }),
             input: Mutex::new(()), events, host, stopped: AtomicBool::new(false), shutdown: Notify::new(),
+            password_checks: Arc::new(tokio::sync::Semaphore::new(2)),
         }
     }
 
@@ -137,7 +146,7 @@ impl RemoteHub {
         sessions.sort_by_key(|session| session.id);
         RemoteStatus {
             enabled: !self.stopped.load(Ordering::Relaxed), port: inner.port,
-            origins: inner.origins.clone(), sessions, clients: inner.connected.len(),
+            origins: inner.origins.clone(), sessions, clients: inner.connected.len(), password_enabled: inner.password.is_some(),
         }
     }
 
@@ -227,6 +236,41 @@ impl RemoteHub {
         Ok(cookie)
     }
 
+    async fn login_password(&self, password: String, origin: &str, ip: IpAddr) -> Result<String, LoginError> {
+        if !origin.starts_with("https://") {
+            return Err(LoginError::new(StatusCode::FORBIDDEN, "访问码登录仅支持 HTTPS 地址，请使用公网地址或扫码配对"));
+        }
+        let permit = self.password_checks.clone().try_acquire_owned().map_err(|_| LoginError::limited(2))?;
+        let (verifier, generation) = {
+            let mut inner = self.inner.lock().unwrap();
+            if self.stopped.load(Ordering::Relaxed) || !inner.origins.iter().any(|allowed| allowed == origin) {
+                return Err(LoginError::new(StatusCode::UNAUTHORIZED, "无法登录，请重试或在电脑端重新设置访问码"));
+            }
+            inner.login_limiter.reserve(ip, Instant::now()).map_err(LoginError::limited)?;
+            (inner.password.clone(), inner.auth_generation)
+        };
+        let Some(verifier) = verifier else {
+            return Err(LoginError::new(StatusCode::UNAUTHORIZED, "无法登录，请重试或在电脑端重新设置访问码"));
+        };
+        let matches = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            verifier.verify(&password)
+        }).await.map_err(|_| LoginError::new(StatusCode::SERVICE_UNAVAILABLE, "登录暂时不可用，请稍后重试"))?;
+        let _input = self.input.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap();
+        if !matches || self.stopped.load(Ordering::Relaxed) || inner.auth_generation != generation
+            || !inner.origins.iter().any(|allowed| allowed == origin) {
+            return Err(LoginError::new(StatusCode::UNAUTHORIZED, "无法登录，请重试或在电脑端重新设置访问码"));
+        }
+        inner.clients.retain(|_, client| client.expires > Instant::now());
+        if inner.clients.len() >= MAX_CLIENTS {
+            return Err(LoginError::new(StatusCode::TOO_MANY_REQUESTS, "已授权设备达到上限，请在电脑端撤销设备后重试"));
+        }
+        let cookie = secret();
+        inner.clients.insert(cookie.clone(), Client { id: uuid::Uuid::new_v4().to_string(), expires: Instant::now() + PASSWORD_CLIENT_LIFETIME });
+        Ok(cookie)
+    }
+
     fn authenticate(&self, headers: &HeaderMap) -> Option<String> {
         let cookie = headers.get(header::COOKIE)?.to_str().ok()?.split(';')
             .filter_map(|part| part.trim().split_once('='))
@@ -239,7 +283,7 @@ impl RemoteHub {
         let _input = self.input.lock().unwrap();
         let mut inner = self.inner.lock().unwrap();
         if !inner.clients.values().any(|entry| entry.id == client && entry.expires > Instant::now()) {
-            return Err("设备授权已失效，请重新扫码配对".into());
+            return Err("设备授权已失效，请重新登录或扫码配对".into());
         }
         let session = inner.sessions.get_mut(&id).filter(|session| session.generation == generation).ok_or("会话已结束或取消分享")?;
         if !session.allow_control { return Err("电脑端尚未允许此会话接受远程输入".into()); }
@@ -257,7 +301,7 @@ impl RemoteHub {
         let _input = self.input.lock().unwrap();
         let inner = self.inner.lock().unwrap();
         if !inner.clients.values().any(|entry| entry.id == client && entry.expires > Instant::now()) {
-            return Err("设备授权已失效，请重新扫码配对".into());
+            return Err("设备授权已失效，请重新登录或扫码配对".into());
         }
         let session = inner.sessions.get(&id).filter(|session| session.generation == generation).ok_or("会话已结束")?;
         if !session.allow_control || session.controller.as_deref() != Some(client) || session.epoch.as_deref() != Some(epoch) {
@@ -298,8 +342,21 @@ impl RemoteHub {
     }
 
     fn revoke_clients(&self) {
+        self.revoke_with_password(None);
+    }
+
+    fn set_password(&self, password: Option<PasswordVerifier>) {
+        self.revoke_with_password(Some(password));
+    }
+
+    fn revoke_with_password(&self, password: Option<Option<PasswordVerifier>>) {
         let _input = self.input.lock().unwrap();
         let mut inner = self.inner.lock().unwrap();
+        inner.auth_generation += 1;
+        if let Some(password) = password {
+            inner.password = password;
+            inner.login_limiter = LoginLimiter::default();
+        }
         inner.clients.clear();
         inner.pairs.clear();
         inner.connected.clear();
@@ -355,7 +412,9 @@ async fn guard(State(hub): State<Arc<RemoteHub>>, request: Request<Body>, next: 
             inner.origins.iter().any(|allowed| allowed == origin) && origin_authority(origin).as_deref() == Some(host)
         }))
     };
-    if !valid_host || api && !valid_origin { return StatusCode::FORBIDDEN.into_response(); }
+    let session_check = request.method() == axum::http::Method::GET && request.uri().path() == "/api/auth";
+    let valid_session_check = session_check && (request_origin(request.headers()).is_none() || valid_origin);
+    if !valid_host || api && !valid_origin && !valid_session_check { return StatusCode::FORBIDDEN.into_response(); }
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -371,13 +430,60 @@ struct PairRequest { token: String }
 async fn pair_handler(State(hub): State<Arc<RemoteHub>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Json(request): Json<PairRequest>) -> Response {
     let origin = request_origin(&headers).unwrap_or("");
     match hub.pair(&request.token, origin, peer.ip()) {
-        Ok(cookie) => {
-            let secure = if origin.starts_with("https://") { "; Secure" } else { "" };
-            let mut response = Json(json!({"ok": true})).into_response();
-            response.headers_mut().insert(header::SET_COOKIE, HeaderValue::from_str(&format!("sterm_remote={cookie}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200{secure}")).unwrap());
-            response
-        }
+        Ok(cookie) => authenticated_response(&cookie, origin, CLIENT_LIFETIME),
         Err(status) => status.into_response(),
+    }
+}
+
+fn authenticated_response(cookie: &str, origin: &str, lifetime: Duration) -> Response {
+    let secure = if origin.starts_with("https://") { "; Secure" } else { "" };
+    let mut response = Json(json!({"ok": true})).into_response();
+    response.headers_mut().insert(header::SET_COOKIE, HeaderValue::from_str(&format!(
+        "sterm_remote={cookie}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}{secure}", lifetime.as_secs()
+    )).unwrap());
+    response
+}
+
+#[derive(Debug)]
+struct LoginError {
+    status: StatusCode,
+    message: &'static str,
+    retry_after: Option<u64>,
+}
+
+impl LoginError {
+    fn new(status: StatusCode, message: &'static str) -> Self { Self { status, message, retry_after: None } }
+    fn limited(wait: u64) -> Self {
+        Self { status: StatusCode::TOO_MANY_REQUESTS, message: "尝试次数较多，请稍后重试", retry_after: Some(wait) }
+    }
+}
+
+impl IntoResponse for LoginError {
+    fn into_response(self) -> Response {
+        let mut response = (self.status, Json(json!({"message": self.message, "retryAfter": self.retry_after}))).into_response();
+        if let Some(wait) = self.retry_after {
+            response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from_str(&wait.to_string()).unwrap());
+        }
+        response
+    }
+}
+
+async fn auth_handler(State(hub): State<Arc<RemoteHub>>, headers: HeaderMap) -> Json<Value> {
+    let authenticated = hub.authenticate(&headers).is_some();
+    let inner = hub.inner.lock().unwrap();
+    let host = headers.get(header::HOST).and_then(|value| value.to_str().ok()).unwrap_or("");
+    let password_allowed = inner.origins.iter().any(|origin| origin.starts_with("https://") && origin_authority(origin).as_deref() == Some(host));
+    Json(json!({"authenticated": authenticated, "passwordEnabled": inner.password.is_some(), "passwordAllowed": password_allowed}))
+}
+
+#[derive(Deserialize)]
+struct PasswordRequest { password: String }
+
+async fn password_handler(State(hub): State<Arc<RemoteHub>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Json(request): Json<PasswordRequest>) -> Response {
+    let origin = request_origin(&headers).unwrap_or("");
+    match hub.login_password(request.password, origin, peer.ip()).await {
+        Ok(cookie) => authenticated_response(&cookie, origin, PASSWORD_CLIENT_LIFETIME),
+        Err(error) => error.into_response(),
     }
 }
 
@@ -494,7 +600,11 @@ async fn run_socket(mut socket: WebSocket, hub: Arc<RemoteHub>, client: String) 
                 if hub.stopped.load(Ordering::Relaxed) || last_seen.elapsed() > Duration::from_secs(45)
                     || !ready && snapshot_request.is_some() && snapshot_started.elapsed() > Duration::from_secs(15) { break; }
                 let authorized = hub.inner.lock().unwrap().clients.values().any(|entry| entry.id == client && entry.expires > Instant::now());
-                if !authorized || socket.send(Message::Ping(Vec::new().into())).await.is_err() { break; }
+                if !authorized {
+                    let _ = send(&mut socket, &json!({"type": "authExpired"})).await;
+                    break;
+                }
+                if socket.send(Message::Ping(Vec::new().into())).await.is_err() { break; }
             }
         }
     }
@@ -513,7 +623,8 @@ async fn asset_handler(State(hub): State<Arc<RemoteHub>>, request: Request<Body>
 }
 
 fn router(hub: Arc<RemoteHub>) -> Router {
-    Router::new().route("/api/pair", post(pair_handler)).route("/api/ws", get(websocket_handler))
+    Router::new().route("/api/pair", post(pair_handler)).route("/api/auth", get(auth_handler))
+        .route("/api/password/login", post(password_handler)).route("/api/ws", get(websocket_handler))
         .fallback(get(asset_handler)).layer(DefaultBodyLimit::max(4096))
         .layer(middleware::from_fn_with_state(hub.clone(), guard)).with_state(hub)
 }
@@ -521,6 +632,7 @@ fn router(hub: Arc<RemoteHub>) -> Router {
 #[derive(Default)]
 pub struct RemoteState {
     hub: Mutex<Option<Arc<RemoteHub>>>,
+    operation: tokio::sync::Mutex<()>,
 }
 
 pub fn remote_port(hub: &RemoteHub) -> u16 { hub.inner.lock().unwrap().port }
@@ -533,8 +645,50 @@ impl RemoteState {
     }
 }
 
+fn password_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app.path().app_local_data_dir().map_err(|_| "无法定位访问码配置目录")?.join("remote-auth");
+    Ok(dir.join("password.credential"))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PasswordConfig { enabled: bool, can_reveal: bool }
+
+impl From<&remote_password::SavedPassword> for PasswordConfig {
+    fn from(saved: &remote_password::SavedPassword) -> Self {
+        Self { enabled: saved.verifier.is_some(), can_reveal: saved.can_reveal() }
+    }
+}
+
+#[tauri::command]
+pub fn remote_password_config(app: AppHandle) -> Result<PasswordConfig, String> {
+    Ok(PasswordConfig::from(&remote_password::read(&password_path(&app)?)?))
+}
+
+/// 仅供电脑端设置窗口主动查看，不通过远程 HTTP 或状态轮询返回访问码。
+#[tauri::command]
+pub fn remote_password_reveal(app: AppHandle, window: tauri::WebviewWindow) -> Result<String, String> {
+    if window.label() != "main" { return Err("仅可在电脑端设置中查看长期访问码".into()); }
+    Ok(remote_password::read(&password_path(&app)?)?.reveal()?.to_owned())
+}
+
+#[tauri::command]
+pub async fn remote_password_save(app: AppHandle, password: Option<String>) -> Result<PasswordConfig, String> {
+    let state = app.state::<RemoteState>();
+    let _operation = state.operation.lock().await;
+    let path = password_path(&app)?;
+    let saved = tauri::async_runtime::spawn_blocking(move || remote_password::write(&path, password.as_deref()))
+        .await.map_err(|_| "无法更新访问码")??;
+    let config = PasswordConfig::from(&saved);
+    if let Some(hub) = state.current() { hub.set_password(saved.verifier); }
+    Ok(config)
+}
+
 #[tauri::command]
 pub async fn remote_start(app: AppHandle, port: u16, lan: bool) -> Result<RemoteStatus, String> {
+    let state = app.state::<RemoteState>();
+    let _operation = state.operation.lock().await;
+    let password = remote_password::read(&password_path(&app)?)?.verifier;
     if app.state::<RemoteState>().current().is_some() { return Err("远程服务已启动".into()); }
     let listener = tokio::net::TcpListener::bind((if lan { "0.0.0.0" } else { "127.0.0.1" }, port)).await.map_err(|error| format!("启动远程服务失败：{error}"))?;
     let port = listener.local_addr().map_err(|error| error.to_string())?.port();
@@ -549,6 +703,7 @@ pub async fn remote_start(app: AppHandle, port: u16, lan: bool) -> Result<Remote
     origins.sort();
     origins.dedup();
     let hub = Arc::new(RemoteHub::new(port, origins, Arc::new(DesktopHost(app.clone()))));
+    hub.inner.lock().unwrap().password = password;
     {
         let state = app.state::<RemoteState>();
         let mut current = state.hub.lock().unwrap();
@@ -573,7 +728,9 @@ pub fn remote_pair(state: tauri::State<RemoteState>, origin: String) -> Result<V
 }
 
 #[tauri::command]
-pub fn remote_stop(app: AppHandle) -> Result<(), String> {
+pub async fn remote_stop(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<RemoteState>();
+    let _operation = state.operation.lock().await;
     app.state::<crate::tunnel::TunnelState>().stop()?;
     app.state::<RemoteState>().stop();
     Ok(())
@@ -628,6 +785,133 @@ mod tests {
             hub.inner.lock().unwrap().clients.insert(format!("test-{id}"), Client { id: id.into(), expires: Instant::now() + CLIENT_LIFETIME });
         }
         (hub, host)
+    }
+
+    #[tokio::test]
+    async fn password_login_coexists_with_qr_and_preserves_control_permissions() {
+        let (hub, _) = fixture();
+        let verifier = PasswordVerifier::new("012345").unwrap();
+        hub.set_password(Some(verifier));
+        hub.set_public_origin(Some("https://terminal.example".into()));
+        let ip = "127.0.0.1".parse().unwrap();
+        assert_eq!(hub.login_password("012345".into(), "http://127.0.0.1:8123", ip).await.unwrap_err().status, StatusCode::FORBIDDEN);
+        assert_eq!(hub.login_password("wrong".into(), "https://terminal.example", ip).await.unwrap_err().status, StatusCode::UNAUTHORIZED);
+        let password_cookie = hub.login_password("012345".into(), "https://terminal.example", ip).await.unwrap();
+        let pair = hub.issue_pair("https://terminal.example").unwrap();
+        let token = pair["url"].as_str().unwrap().split("#pair=").nth(1).unwrap();
+        let qr_cookie = hub.pair(token, "https://terminal.example", ip).unwrap();
+        let (client, password_remaining, qr_remaining) = {
+            let inner = hub.inner.lock().unwrap();
+            let password = &inner.clients[&password_cookie];
+            let qr = &inner.clients[&qr_cookie];
+            (password.id.clone(), password.expires.duration_since(Instant::now()), qr.expires.duration_since(Instant::now()))
+        };
+        assert!(password_remaining > Duration::from_secs(29 * 24 * 60 * 60));
+        assert!(qr_remaining <= CLIENT_LIFETIME);
+        assert!(qr_remaining > CLIENT_LIFETIME - Duration::from_secs(10));
+        hub.share(SharedSession { id: 1, generation: 1, title: "readonly".into(), cols: 80, rows: 24,
+            allow_control: false, controller: None, epoch: None, seq: 0, cwd: None, agent: None, agent_status: None }).unwrap();
+        assert!(hub.claim(&client, 1, 1).is_err());
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, HeaderValue::from_str(&format!("sterm_remote={password_cookie}")).unwrap());
+        assert!(hub.authenticate(&headers).is_some());
+        hub.revoke_clients();
+        assert!(hub.authenticate(&headers).is_none());
+        assert!(hub.status().password_enabled);
+        let replacement_cookie = hub.login_password("012345".into(), "https://terminal.example", ip).await.unwrap();
+        headers.insert(header::COOKIE, HeaderValue::from_str(&format!("sterm_remote={replacement_cookie}")).unwrap());
+        hub.set_password(None);
+        assert!(hub.authenticate(&headers).is_none());
+        assert!(!hub.status().password_enabled);
+        assert!(hub.login_password("012345".into(), "https://terminal.example", ip).await.is_err());
+    }
+
+    #[test]
+    fn saved_code_reads_preserve_devices_and_config_contains_only_metadata() {
+        let dir = crate::storage::tests::TempDir::new();
+        let path = dir.path().join("password.credential");
+        let saved = remote_password::write(&path, Some("012345")).unwrap();
+        let (hub, _) = fixture();
+        hub.set_password(saved.verifier);
+        let origin = "http://127.0.0.1:8123";
+        let pair = hub.issue_pair(origin).unwrap();
+        let token = pair["url"].as_str().unwrap().split("#pair=").nth(1).unwrap();
+        let ip = "127.0.0.1".parse().unwrap();
+        let cookie = hub.pair(token, origin, ip).unwrap();
+        let unused_pair = hub.issue_pair(origin).unwrap();
+        let unused_token = unused_pair["url"].as_str().unwrap().split("#pair=").nth(1).unwrap();
+        let saved = remote_password::read(&path).unwrap();
+        assert_eq!(saved.reveal().unwrap(), "012345");
+        assert_eq!(serde_json::to_value(PasswordConfig::from(&saved)).unwrap(), json!({ "enabled": true, "canReveal": true }));
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, HeaderValue::from_str(&format!("sterm_remote={cookie}")).unwrap());
+        assert!(hub.authenticate(&headers).is_some());
+        assert!(hub.pair(unused_token, origin, ip).is_ok());
+    }
+
+    #[tokio::test]
+    async fn revocation_rejects_an_inflight_password_check() {
+        let (hub, _) = fixture();
+        hub.set_password(Some(PasswordVerifier::new("123456").unwrap()));
+        hub.set_public_origin(Some("https://terminal.example".into()));
+        let request_hub = hub.clone();
+        let request = tokio::spawn(async move {
+            request_hub.login_password("123456".into(), "https://terminal.example", "127.0.0.1".parse().unwrap()).await
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while hub.password_checks.available_permits() == 2 { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        hub.revoke_clients();
+        assert_eq!(request.await.unwrap().unwrap_err().status, StatusCode::UNAUTHORIZED);
+        assert!(hub.inner.lock().unwrap().clients.is_empty());
+    }
+
+    #[tokio::test]
+    async fn password_http_routes_enforce_origins_limits_and_secure_cookie() {
+        let (hub, _) = fixture();
+        hub.set_password(Some(PasswordVerifier::new("123456").unwrap()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let root = format!("http://{address}");
+        let origin = "https://terminal.example";
+        hub.inner.lock().unwrap().origins = vec![root.clone(), origin.into()];
+        let app = router(hub.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
+        let client = reqwest::Client::new();
+        let status = client.get(format!("{root}/api/auth")).send().await.unwrap();
+        assert_eq!(status.status(), StatusCode::OK);
+        assert_eq!(status.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(status.json::<Value>().await.unwrap(), json!({"authenticated": false, "passwordEnabled": true, "passwordAllowed": false}));
+        assert_eq!(client.get(format!("{root}/api/auth")).header("origin", "https://attacker.example").send().await.unwrap().status(), StatusCode::FORBIDDEN);
+        assert_eq!(client.post(format!("{root}/api/password/login")).header("origin", &root).json(&json!({"password":"123456"})).send().await.unwrap().status(), StatusCode::FORBIDDEN);
+        assert_eq!(client.post(format!("{root}/api/password/login")).header("origin", origin).json(&json!({"password":"123456"})).send().await.unwrap().status(), StatusCode::FORBIDDEN);
+        let response = client.post(format!("{root}/api/password/login")).header("host", "terminal.example").header("origin", origin)
+            .json(&json!({"password":"123456"})).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let cookie = response.headers()[header::SET_COOKIE].to_str().unwrap();
+        assert!(cookie.contains("Max-Age=2592000"));
+        assert!(cookie.contains("HttpOnly; SameSite=Strict"));
+        assert!(cookie.ends_with("; Secure"));
+        assert!(!cookie.contains("123456"));
+        let response = client.get(format!("{root}/api/auth")).header("host", "terminal.example")
+            .header("cookie", cookie.split(';').next().unwrap()).send().await.unwrap().json::<Value>().await.unwrap();
+        assert_eq!(response["authenticated"], true);
+        assert_eq!(response["passwordAllowed"], true);
+        for path in ["/api/password/reveal", "/api/remote_password_reveal", "/api/password/config"] {
+            let response = client.get(format!("{root}{path}")).header("host", "terminal.example").header("origin", origin)
+                .header("cookie", cookie.split(';').next().unwrap()).send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+        for suffix in 1..5 {
+            let response = client.post(format!("{root}/api/password/login")).header("host", "terminal.example").header("origin", origin)
+                .header("x-forwarded-for", format!("203.0.113.{suffix}")).json(&json!({"password":"bad"})).send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        let response = client.post(format!("{root}/api/password/login")).header("host", "terminal.example").header("origin", origin)
+            .header("x-forwarded-for", "203.0.113.99").json(&json!({"password":"123456"})).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(response.headers().contains_key(header::RETRY_AFTER));
+        server.abort();
     }
 
     #[test]

@@ -7,6 +7,8 @@ import type { RemoteController } from "./controller";
 import type { TunnelConfig, TunnelStatus } from "./types";
 import "./settings.css";
 
+interface PasswordConfig { enabled: boolean; canReveal: boolean }
+
 export function renderRemoteSettings(controller: RemoteController): { page: HTMLElement; dispose: () => void } {
   const page = document.createElement("div");
   page.className = "remote-settings";
@@ -18,10 +20,21 @@ export function renderRemoteSettings(controller: RemoteController): { page: HTML
       <div data-el="on" hidden>
         <div class="rs-kind"><div class="rs-segment" aria-label="连接地址类型"><button data-address="lan" aria-pressed="true">局域网</button><button data-address="public" aria-pressed="false">公网</button></div><span data-el="address-hint" class="rs-muted"></span></div>
         <div data-el="unavailable" class="rs-unavailable" hidden>${remoteIcon("globe")}<div>公网尚未连接<p>完成一次配置后，即可在外网扫码访问。</p><button data-el="go-public" class="rs-link">前往公网设置 →</button></div></div>
-        <div data-el="pairing" class="rs-pairing"><div class="rs-qr-column"><div class="rs-qr-frame"><img data-el="qr" alt="sTerm 一次性配对二维码" hidden><span data-el="qr-placeholder">正在生成…</span></div><span class="rs-muted rs-qr-caption">手机相机扫码配对</span></div><div class="rs-pairing-details"><label class="rs-small-label" for="remote-address">连接地址</label><div class="rs-copy-field"><select id="remote-address" data-el="address" aria-label="连接地址"></select><button data-el="copy" class="rs-icon-button" aria-label="复制配对链接" title="复制配对链接">${remoteIcon("copy")}</button></div><p class="rs-muted rs-pair-hint">二维码含一次性配对凭证，5 分钟内有效。<br>已连接设备不受二维码刷新影响。</p><button data-el="refresh-qr" class="settings-integration-btn">${remoteIcon("refresh")}刷新二维码</button><p data-el="expiry" class="rs-quiet-detail"></p></div></div>
+        <div data-el="pairing" class="rs-pairing"><div class="rs-qr-column"><div class="rs-qr-frame"><img data-el="qr" alt="sTerm 一次性配对二维码" hidden><span data-el="qr-placeholder">正在生成…</span></div><span class="rs-muted rs-qr-caption">手机相机扫码配对</span></div><div class="rs-pairing-details"><label class="rs-small-label" for="remote-address">连接地址</label><div class="rs-copy-field"><select id="remote-address" data-el="address" aria-label="连接地址"></select><button data-el="copy" class="rs-icon-button" aria-label="复制配对链接" title="复制配对链接">${remoteIcon("copy")}</button></div><p class="rs-muted rs-pair-hint">二维码含一次性配对凭证，5 分钟内有效。<br>已连接设备不受二维码刷新影响。</p><button data-el="refresh-qr" class="settings-integration-btn">${remoteIcon("refresh")}刷新二维码</button><button data-el="copy-address" class="rs-link rs-copy-address">复制地址</button><p data-el="expiry" class="rs-quiet-detail"></p></div></div>
         <div class="rs-summary"><span><span class="rs-dot green"></span><strong data-el="shared-count">0</strong> 个会话已分享</span><span>已连接设备 <strong data-el="clients">0</strong></span><button data-el="manage" class="rs-link">管理</button></div>
         <div data-el="devices" class="rs-device" hidden><span>撤销已配对设备，终端继续运行。</span><button data-el="revoke" class="settings-integration-btn">撤销全部设备</button></div>
       </div>
+      <section class="rs-password" aria-label="访问码登录">
+        <label class="settings-row rs-default"><span><span class="settings-label">访问码登录</span><span class="rs-description">设置 6 位数字访问码，通过公网地址随时登录</span></span><input data-el="password-enabled" class="settings-switch" type="checkbox" aria-label="启用访问码登录"></label>
+        <div data-el="password-summary" class="rs-password-summary" hidden><code data-el="password-value" class="rs-password-value" aria-label="已保存的长期访问码">••••••</code><button data-el="password-reveal" class="rs-link" aria-pressed="false">显示</button><button data-el="password-copy" class="rs-link">复制</button><button data-el="password-change" class="rs-link">修改</button></div>
+        <p data-el="password-legacy" class="rs-muted rs-password-hint" hidden>旧访问码仍可登录，重新设置一次后即可查看和复制。</p>
+        <form data-el="password-form" class="rs-password-form" hidden>
+          <div class="rs-password-fields"><label><span class="rs-field-label">长期访问码</span><input data-el="password-new" class="rs-field rs-full" type="password" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="new-password" placeholder="6 位数字" required></label></div>
+          <div class="rs-password-actions"><label class="rs-muted"><input data-el="password-show" type="checkbox">显示访问码</label><button data-el="password-cancel" class="settings-integration-btn" type="button">取消</button><button data-el="password-save" class="settings-integration-btn rs-primary" type="submit">保存访问码</button></div>
+          <p class="rs-muted rs-password-hint">保存或关闭访问码将撤销全部设备授权，需要重新登录。</p>
+        </form>
+        <p class="rs-muted rs-password-hint">访问码登录仅支持 HTTPS 公网地址；局域网继续使用二维码。浏览器授权 30 天，关闭远程访问后需重新登录。</p>
+      </section>
       <details class="rs-advanced"><summary>高级选项</summary><label class="settings-row"><span>监听端口</span><input data-el="port" class="rs-field rs-port" type="number" min="1024" max="65535" aria-label="监听端口"></label><label class="settings-row"><span>允许局域网连接</span><input data-el="lan" class="settings-switch" type="checkbox"></label><p class="rs-muted">监听设置将在下次开启远程访问时生效。</p></details>
     </div>
     <div data-panel="permissions" role="tabpanel" hidden>
@@ -50,15 +63,25 @@ export function renderRemoteSettings(controller: RemoteController): { page: HTML
   let sessionsKey = "";
   let tunnel: TunnelStatus = { running: false, connected: false, message: "" };
   let saved: TunnelConfig | undefined;
+  let passwordEnabled = false;
+  let passwordLoaded = false;
+  let passwordEditing = false;
+  let passwordCanReveal = false;
+  let passwordRevealed = false;
+  let passwordReading = false;
+  let passwordReadVersion = 0;
   const port = find<HTMLInputElement>("port");
   const lan = find<HTMLInputElement>("lan");
   const token = find<HTMLInputElement>("token");
   const domain = find<HTMLInputElement>("domain");
   const address = find<HTMLSelectElement>("address");
+  const passwordNew = find<HTMLInputElement>("password-new");
+
   port.value = localStorage.getItem("sterm-remote-port") ?? "8765";
   lan.checked = localStorage.getItem("sterm-remote-lan") !== "false";
   const report = (reason: unknown): void => { if (!disposed) find("result").textContent = String(reason); };
   const selectTab = (name: string, focus = false): void => {
+    if (name !== "connection") hideSavedPassword();
     page.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach(button => {
       const selected = button.dataset.tab === name;
       button.setAttribute("aria-selected", String(selected));
@@ -66,6 +89,7 @@ export function renderRemoteSettings(controller: RemoteController): { page: HTML
       if (selected && focus) button.focus();
     });
     page.querySelectorAll<HTMLElement>("[data-panel]").forEach(panel => { panel.hidden = panel.dataset.panel !== name; });
+    render();
   };
   const clearQr = (): void => {
     qrVersion++;
@@ -130,11 +154,23 @@ export function renderRemoteSettings(controller: RemoteController): { page: HTML
     find("shared-count").textContent = String(controller.sessions.filter(session => session.isRemoteShared).length);
     find<HTMLButtonElement>("revoke").disabled = busy;
     find<HTMLButtonElement>("start").disabled = busy;
+    find<HTMLInputElement>("password-enabled").checked = passwordEnabled || passwordEditing;
+    find<HTMLInputElement>("password-enabled").disabled = busy || !passwordLoaded;
+    find("password-summary").hidden = !passwordEnabled || passwordEditing;
+    find("password-form").hidden = !passwordEditing;
+    find("password-legacy").hidden = !passwordEnabled || passwordCanReveal || passwordEditing;
+    for (const name of ["password-reveal", "password-copy"]) {
+      find<HTMLButtonElement>(name).disabled = busy || passwordReading || !passwordCanReveal;
+    }
+    for (const name of ["password-change", "password-save", "password-cancel", "password-show", "password-new"]) {
+      find<HTMLInputElement | HTMLButtonElement>(name).disabled = busy;
+    }
     const origins = (status?.origins ?? []).filter(value => addressKind === "public" ? value.startsWith("https:") : value.startsWith("http:"));
     const previous = origin;
     origin = origins.includes(origin) ? origin : origins.find(value => !value.includes("127.0.0.1") && !value.includes("localhost")) ?? origins[0] ?? "";
     if (JSON.stringify([...address.options].map(option => option.value)) !== JSON.stringify(origins)) address.replaceChildren(...origins.map(value => new Option(value, value)));
     address.value = origin;
+    find<HTMLButtonElement>("copy-address").disabled = busy || !origin;
     find("pairing").hidden = !origin;
     find("unavailable").hidden = Boolean(origin);
     find("address-hint").textContent = addressKind === "lan" ? "手机与电脑连接同一网络" : "通过 HTTPS 访问，无需在同一网络";
@@ -194,6 +230,12 @@ export function renderRemoteSettings(controller: RemoteController): { page: HTML
     if (disposed || refreshing) return;
     refreshing = true;
     try {
+      try {
+        const passwordConfig = await invoke<PasswordConfig>("remote_password_config");
+        if (disposed) return;
+        applyPasswordConfig(passwordConfig);
+      } catch (reason) { report(reason); }
+      passwordLoaded = true;
       tunnel = await invoke<TunnelStatus>("tunnel_status");
       if (tunnel.running && tunnel.provider) provider = tunnel.provider;
       await controller.refresh();
@@ -233,6 +275,88 @@ export function renderRemoteSettings(controller: RemoteController): { page: HTML
   find<HTMLInputElement>("input").onchange = () => { const input = find<HTMLInputElement>("input").checked; void operation(() => controller.setDefaults({ ...controller.defaults, input })); };
   page.querySelectorAll<HTMLButtonElement>("[data-address]").forEach(button => { button.onclick = () => { addressKind = button.dataset.address!; render(); }; });
   address.onchange = () => { origin = address.value; void generateQr(); };
+  const hideSavedPassword = (): void => {
+    passwordReadVersion++;
+    passwordReading = passwordRevealed = false;
+    find("password-value").textContent = "••••••";
+    find("password-reveal").textContent = "显示";
+    find("password-reveal").setAttribute("aria-pressed", "false");
+  };
+  const applyPasswordConfig = (config: PasswordConfig): void => {
+    passwordEnabled = config.enabled;
+    passwordCanReveal = config.canReveal;
+    if (!passwordEnabled || !passwordCanReveal) hideSavedPassword();
+  };
+  const readSavedPassword = async (action: "show" | "copy"): Promise<void> => {
+    if (disposed || busy || passwordReading || !passwordCanReveal) return;
+    const version = ++passwordReadVersion;
+    passwordReading = true;
+    render();
+    try {
+      const password = await invoke<string>("remote_password_reveal");
+      if (disposed || version !== passwordReadVersion) return;
+      if (action === "copy") {
+        await writeText(password);
+        if (!disposed && version === passwordReadVersion) find("result").textContent = "长期访问码已复制。";
+      } else {
+        passwordRevealed = true;
+        find("password-value").textContent = password;
+        find("password-reveal").textContent = "隐藏";
+        find("password-reveal").setAttribute("aria-pressed", "true");
+      }
+    } catch (reason) { if (version === passwordReadVersion) report(reason); }
+    finally { if (version === passwordReadVersion) { passwordReading = false; render(); } }
+  };
+  const clearPasswordFields = (): void => {
+    hideSavedPassword();
+    passwordNew.value = "";
+    passwordNew.type = "password";
+    find<HTMLInputElement>("password-show").checked = false;
+  };
+  find("password-reveal").onclick = () => {
+    if (passwordRevealed) { hideSavedPassword(); render(); }
+    else void readSavedPassword("show");
+  };
+  find("password-copy").onclick = () => void readSavedPassword("copy");
+  find<HTMLInputElement>("password-enabled").onchange = () => {
+    clearPasswordFields();
+    if (!find<HTMLInputElement>("password-enabled").checked) {
+      if (passwordEnabled) void operation(async () => {
+        applyPasswordConfig(await invoke<PasswordConfig>("remote_password_save", { password: null }));
+        passwordEditing = false;
+        find("result").textContent = "访问码登录已关闭，设备授权已撤销。";
+        await generateQr();
+      });
+      else { passwordEditing = false; render(); }
+    } else {
+      passwordEditing = true; render(); passwordNew.focus();
+    }
+  };
+  find("password-change").onclick = () => { passwordEditing = true; clearPasswordFields(); render(); passwordNew.focus(); };
+  find("password-cancel").onclick = () => { passwordEditing = false; clearPasswordFields(); render(); find("password-enabled").focus(); };
+  find<HTMLInputElement>("password-show").onchange = () => {
+    passwordNew.type = find<HTMLInputElement>("password-show").checked ? "text" : "password";
+  };
+  find<HTMLFormElement>("password-form").onsubmit = event => {
+    event.preventDefault();
+    if (!find<HTMLFormElement>("password-form").reportValidity()) return;
+    if (!/^[0-9]{6}$/.test(passwordNew.value)) {
+      find("result").textContent = "访问码必须为 6 位数字";
+      passwordNew.focus();
+      return;
+    }
+    void operation(async () => {
+      try {
+        applyPasswordConfig(await invoke<PasswordConfig>("remote_password_save", { password: passwordNew.value }));
+        passwordEditing = false;
+        find("result").textContent = "长期访问码已保存，设备授权已撤销。可通过公网地址输入访问码登录。";
+        await generateQr();
+      } finally { clearPasswordFields(); }
+    });
+  };
+  find("copy-address").onclick = () => {
+    if (origin) void writeText(origin).then(() => { if (!disposed) find("result").textContent = "访问地址已复制。"; }).catch(report);
+  };
   find("refresh-qr").onclick = () => void generateQr();
   find("copy").onclick = () => { if (pairUrl) void writeText(pairUrl).then(() => { if (!disposed) find("result").textContent = "配对链接已复制。"; }).catch(report); };
   find("go-public").onclick = () => selectTab("public");
@@ -265,6 +389,6 @@ export function renderRemoteSettings(controller: RemoteController): { page: HTML
   void invoke<TunnelConfig>("tunnel_config").then(config => { if (disposed) return; saved = config; domain.value = config.cloudflareUrl; render(); }).catch(report);
   void refresh();
   render();
-  return { page, dispose: () => { disposed = true; clearQr(); token.value = ""; find<HTMLInputElement>("api-token").value = ""; unsubscribe(); window.clearInterval(timer); } };
+  return { page, dispose: () => { disposed = true; clearQr(); clearPasswordFields(); token.value = ""; find<HTMLInputElement>("api-token").value = ""; unsubscribe(); window.clearInterval(timer); } };
 }
 

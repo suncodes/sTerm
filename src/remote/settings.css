@@ -90,3 +90,13 @@
   .rs-heading-toggle .rs-state { display: none; }
   .rs-summary { flex-wrap: wrap; gap: 10px; }
 }
+.rs-copy-address { margin-left: 12px; }
+.rs-password { margin-top: 16px; padding: 8px 0 12px; border-bottom: 1px solid var(--border); }
+.rs-password-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin: 8px 0 10px; font-size: 11px; }
+.rs-password-value { display: inline-flex; align-items: center; justify-content: center; min-width: 112px; height: 32px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: 4px; background: #242428; color: var(--fg); font: 13px Consolas, monospace; letter-spacing: 3px; user-select: all; }
+.rs-password-fields { max-width: 240px; }
+.rs-password-fields .rs-field-label { margin-top: 8px; }
+.rs-password-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.rs-password-actions > label { display: flex; align-items: center; gap: 5px; margin-right: auto; font-size: 11px; cursor: pointer; }
+.rs-password-actions input { accent-color: var(--accent); }
+.rs-password-hint { margin: 8px 0 0; font-size: 11px; line-height: 1.6; }

@@ -6,6 +6,7 @@ import { TerminalMirror } from "./mirror";
 import { AGENT_STATUS_LABELS } from "../terminal/agentstate";
 import { InputHistory, INPUT_HISTORY_KEY } from "./history";
 import { HistoryPanel } from "./historypanel";
+import { RemoteLogin, type AuthStatus } from "./login";
 
 const element = <ElementType extends HTMLElement>(id: string): ElementType => document.getElementById(id) as ElementType;
 const app = element("remote-app");
@@ -49,6 +50,8 @@ let wasControlling = false;
 let revoked = false;
 let sessionsKey = "";
 let sheetFocus: HTMLElement | null = null;
+let connectAttempt = 0;
+const login = new RemoteLogin(element("login-panel"), () => { revoked = false; void connect(); });
 
 const sessionKey = (session: SharedSession): string => session.id + "/" + session.generation;
 const connected = (): boolean => socket?.readyState === WebSocket.OPEN;
@@ -229,11 +232,26 @@ function disconnected(): void {
   mirror.invalidate();
   if (current) current = { ...current, controller: null, epoch: null };
   element("offline-banner").hidden = false;
-  element("offline-message").textContent = revoked ? "设备授权已撤销，请重新扫码配对" : "连接已断开 · 终端画面与草稿已保留";
-  connectionState(revoked ? "需要配对" : "等待重连", "offline");
+  element("offline-message").textContent = revoked ? "设备授权已失效，请重新登录或扫码" : "连接已断开 · 终端画面与草稿已保留";
+  connectionState(revoked ? "需要登录" : "等待重连", "offline");
   syncControls(); renderSessions();
 }
-function connect(): void {
+function requireLogin(message = ""): void {
+  connectAttempt++;
+  revoked = true;
+  window.clearTimeout(retryTimer);
+  window.clearInterval(heartbeat);
+  const previous = socket;
+  socket = undefined;
+  previous?.close();
+  closeSheet();
+  disconnected();
+  app.dataset.auth = "login";
+  void login.check(message);
+}
+
+async function connect(): Promise<void> {
+  const attempt = ++connectAttempt;
   window.clearTimeout(retryTimer);
   window.clearInterval(heartbeat);
   const previous = socket;
@@ -242,6 +260,23 @@ function connect(): void {
   disconnected();
   connectionState("正在连接…", "connecting");
   element("offline-banner").hidden = !current;
+  try {
+    const response = await fetch("/api/auth", { credentials: "same-origin", cache: "no-store" });
+    if (!response.ok) throw new Error("无法检查访问授权");
+    const status: AuthStatus = await response.json();
+    if (attempt !== connectAttempt) return;
+    if (!status.authenticated) { requireLogin(); return; }
+  } catch {
+    if (attempt !== connectAttempt) return;
+    if (!current) { requireLogin(); return; }
+    showNotice("暂时无法连接电脑，正在重试。");
+    retryTimer = window.setTimeout(() => void connect(), reconnectDelay);
+    reconnectDelay = Math.min(15000, reconnectDelay * 2);
+    return;
+  }
+  revoked = false;
+  login.hide();
+  app.dataset.auth = "terminal";
   const next = new WebSocket((location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host + "/api/ws");
   socket = next;
   next.onmessage = event => {
@@ -277,13 +312,10 @@ function connect(): void {
       });
     } else if (message.type === "error") {
       showNotice(message.message);
-    } else if (message.type === "revoked") {
-      revoked = true;
-      showNotice("电脑端已撤销设备授权，请重新扫码。草稿保留在当前页面。");
-      next.close();
+    } else if (message.type === "revoked" || message.type === "authExpired") {
+      requireLogin(message.type === "revoked" ? "电脑端已撤销设备授权，请重新登录或扫码。" : "访问授权已过期，请重新登录或扫码。");
     } else if (message.type === "stopped") {
-      showNotice("电脑端已关闭远程访问，终端继续在电脑上运行。");
-      next.close();
+      requireLogin("电脑端已关闭远程访问，请开启后重新登录。");
     }
   };
   next.onclose = () => {
@@ -291,12 +323,12 @@ function connect(): void {
     window.clearInterval(heartbeat);
     disconnected();
     if (!revoked) {
-      retryTimer = window.setTimeout(connect, reconnectDelay);
+      retryTimer = window.setTimeout(() => void connect(), reconnectDelay);
       reconnectDelay = Math.min(15000, reconnectDelay * 2);
     }
   };
   next.onerror = () => {
-    if (socket === next) showNotice("连接失败，正在重试。若设备授权已过期，请在电脑端重新扫码。");
+    if (socket === next) showNotice("连接失败，正在重试。若设备授权已过期，请重新登录或扫码。");
   };
 }
 function input(data: string): boolean {
@@ -472,15 +504,12 @@ async function start(): Promise<void> {
   history.replaceState(null, "", location.pathname);
   if (token) {
     const response = await fetch("/api/pair", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }), credentials: "same-origin" });
-    if (!response.ok) throw new Error("配对二维码已失效或已使用，请在电脑端重新生成。");
+    if (!response.ok) throw new Error("配对二维码已失效或已使用，请在电脑端重新生成，或输入访问码。");
   }
-  connect();
+  await connect();
 }
 function pairingFailed(error: unknown): void {
-  revoked = true;
-  disconnected();
-  connectionState("配对失败", "offline");
-  showNotice(error instanceof Error ? error.message : String(error));
+  requireLogin(error instanceof Error ? error.message : String(error));
 }
 window.addEventListener("hashchange", () => {
   if (new URLSearchParams(location.hash.slice(1)).has("pair")) void start().catch(pairingFailed);

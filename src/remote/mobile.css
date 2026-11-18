@@ -149,3 +149,20 @@ button:disabled { opacity: .45; cursor: default; }
 }
 @media (max-width: 390px) { .draft-options { font-size: 9px; padding-left: 8px; padding-right: 8px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+#remote-app[data-auth=login] > :not(.icon-library):not(.client-header):not(#login-panel) { display: none !important; }
+#remote-app[data-auth=login] #display-menu { visibility: hidden; }
+.login-panel { flex: 1; min-height: 0; overflow-y: auto; display: grid; align-items: center; justify-items: center; padding: 24px 20px max(24px, env(safe-area-inset-bottom)); }
+.login-card { width: min(100%, 360px); padding: 26px 24px 20px; border: 1px solid var(--border); border-radius: 6px; background: #303034; box-shadow: 0 8px 24px #0002; }
+.login-icon { width: 24px; height: 24px; color: #a9c8f0; }
+.login-card h1 { font-size: 18px; font-weight: 500; margin: 14px 0 10px; }
+.login-message { font-size: 12px; line-height: 1.7; color: var(--fg-dim); margin: 0 0 18px; overflow-wrap: anywhere; }
+#login-form > label { display: block; color: #c3c3ce; font-size: 12px; margin-bottom: 8px; }
+.login-password-field { display: flex; min-height: 46px; border: 1px solid #55555f; border-radius: 4px; background: #252529; }
+.login-password-field:focus-within { border-color: #8aa6d1; box-shadow: 0 0 0 1px #8aa6d1; }
+#login-password { width: 0; flex: 1; min-width: 0; padding: 10px 12px; border: 0; outline: none; background: transparent; color: #e0e0e4; font-size: 18px; letter-spacing: 4px; }
+#login-password::placeholder { color: #9999a7; font-size: 12px; letter-spacing: 0; }
+#login-show { flex-shrink: 0; min-width: 48px; min-height: 44px; border: 0; border-radius: 4px; background: transparent; color: #b9b9c3; font-size: 11px; }
+#login-submit { display: block; width: 100%; height: 44px; margin-top: 14px; border: 1px solid #5279b8; border-radius: 4px; background: #3e639f; color: #f3f6ff; font-size: 12px; }
+#login-submit:hover:not(:disabled) { background: #4873b5; }
+.login-footnote { text-align: center; color: var(--fg-dim); font-size: 11px; margin: 16px 0 0; }
+#login-retry { display: block; margin: 10px auto -4px; }

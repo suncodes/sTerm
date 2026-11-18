@@ -7,7 +7,7 @@
     <title>sTerm 远程终端</title>
   </head>
   <body>
-    <main id="remote-app">
+    <main id="remote-app" data-auth="login">
       <svg class="icon-library" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
         <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m5 6 5 6-5 6m8 0h6"/></symbol>
         <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
@@ -20,6 +20,20 @@
         <symbol id="i-right" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
       </defs></svg>
       <header class="client-header"><div class="client-brand"><svg class="icon brand-icon"><use href="#i-terminal"/></svg><span><strong>sTerm</strong><small>远程连接 · 本机终端</small></span></div><div class="header-actions"><span id="connection" role="status" data-state="connecting">正在连接…</span><button id="display-menu" class="touch-button" aria-label="显示与连接选项" aria-haspopup="dialog"><svg class="icon"><use href="#i-more"/></svg></button></div></header>
+      <section id="login-panel" class="login-panel" aria-labelledby="login-title">
+        <div class="login-card">
+          <svg class="icon login-icon" aria-hidden="true"><use href="#i-lock"/></svg>
+          <h1 id="login-title">连接你的 sTerm</h1>
+          <p id="login-message" class="login-message" role="status" aria-live="polite">正在检查访问授权…</p>
+          <form id="login-form" hidden>
+            <label for="login-password">访问码</label>
+            <div class="login-password-field"><input id="login-password" type="password" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="current-password" enterkeyhint="go" placeholder="6 位数字" aria-describedby="login-message" required><button id="login-show" type="button" aria-pressed="false" aria-label="显示或隐藏访问码">显示</button></div>
+            <button id="login-submit" type="submit">进入</button>
+            <p class="login-footnote">也可使用电脑端二维码配对</p>
+          </form>
+          <button id="login-retry" class="small-action" type="button" hidden>重新连接</button>
+        </div>
+      </section>
       <div class="session-bar"><div id="current-session" class="current-session"><span id="current-dot" class="status-dot" hidden></span><span id="current-title">等待分享会话</span><span id="current-status" class="agent-status" role="status" hidden></span></div><div id="session-tabs" role="tablist" aria-label="远程会话"></div><button id="all-sessions" class="touch-button" aria-label="切换会话" title="切换会话" aria-haspopup="dialog" aria-expanded="false"><svg class="icon"><use href="#i-list"/></svg></button></div>
       <section class="control-bar" aria-label="会话控制"><span id="session-path"></span><div><span id="control-state">只读</span><button id="claim" class="small-action" type="button" hidden disabled>接管</button><button id="release" class="small-action" type="button" hidden disabled>归还</button></div></section>
       <div id="offline-banner" class="offline-banner" hidden><span id="offline-message">连接已断开 · 终端画面已保留</span><button id="reconnect" class="text-button">重新连接</button></div>
