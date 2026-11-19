@@ -1,7 +1,7 @@
 import "@xterm/xterm/css/xterm.css";
 import "./mobile.css";
 import { Terminal } from "@xterm/xterm";
-import { terminalKey, terminalInput, type SharedSession } from "./types";
+import { terminalKey, terminalInput, type SharedSession, type TerminalModifiers } from "./types";
 import { TerminalMirror } from "./mirror";
 import { AGENT_STATUS_LABELS } from "../terminal/agentstate";
 import { InputHistory, INPUT_HISTORY_KEY } from "./history";
@@ -46,7 +46,8 @@ let clientId = "";
 let screenReady = false;
 let lastSeq = 0;
 let awaitingSnapshot = true;
-let ctrlPressed = false;
+let modifiers: TerminalModifiers = {};
+const modifierNames = ["ctrl", "shift", "alt"] as const;
 const keyRepeat = new KeyRepeat();
 let heldKey: { button: HTMLButtonElement; pointerId: number } | undefined;
 let wasControlling = false;
@@ -74,9 +75,13 @@ function send(message: unknown): boolean {
 function ownsControl(): boolean {
   return screenReady && connected() && Boolean(current?.allowControl && current.controller === clientId && current.epoch);
 }
-function setCtrl(pressed: boolean): void {
-  ctrlPressed = pressed;
-  element("ctrl-key").setAttribute("aria-pressed", String(pressed));
+function setModifiers(next: TerminalModifiers): void {
+  modifiers = next;
+  for (const name of modifierNames) element(`${name}-key`).setAttribute("aria-pressed", String(Boolean(next[name])));
+}
+function resetKeyState(): void {
+  stopKeyRepeat();
+  setModifiers({});
 }
 function updateStatusDot(dot: HTMLElement, status: SharedSession["agentStatus"]): string {
   const label = status ? AGENT_STATUS_LABELS[status] ?? "" : "";
@@ -120,7 +125,7 @@ function syncControls(): void {
   element("current-status").hidden = !statusLabel;
   element("session-path").textContent = current?.cwd ?? "";
   element("session-path").title = current?.cwd ?? "";
-  if (!controls) { stopKeyRepeat(); setCtrl(false); }
+  if (!controls) resetKeyState();
   if (controls && !wasControlling) scheduleFit();
   wasControlling = controls;
 }
@@ -197,7 +202,7 @@ function updateSize(cols: number, rows: number): void {
   element("screen").style.minHeight = Math.ceil((rect?.height || rows * font * 1.2) + 16) + "px";
 }
 function attach(session: SharedSession): void {
-  stopKeyRepeat();
+  resetKeyState();
   rememberDraft();
   current = session;
   draft.value = drafts.get(sessionKey(session)) ?? "";
@@ -349,6 +354,7 @@ function submit(): void {
   if (!draft.value || !current) return;
   const text = draft.value;
   if (input(terminalInput(text, element<HTMLInputElement>("append-enter").checked, terminal.modes.bracketedPasteMode))) {
+    resetKeyState();
     inputHistory.record(text, current.title);
     undoDrafts.delete(sessionKey(current));
     draft.value = "";
@@ -371,6 +377,7 @@ function recallHistory(text: string): void {
 }
 function openSheet(name: "sessions" | "keys" | "display" | "history"): void {
   stopKeyRepeat();
+  if (name !== "keys") setModifiers({});
   if (backdrop.hidden) sheetFocus = document.activeElement as HTMLElement | null;
   backdrop.dataset.sheet = name;
   element("sheet-title").textContent = name === "sessions" ? "所有会话 · " + shared.length : name === "keys" ? "更多快捷键" : name === "history" ? "历史命令" : "显示与连接";
@@ -455,7 +462,7 @@ element("session-tabs").onkeydown = event => {
   element("session-tabs").querySelectorAll<HTMLButtonElement>("button")[next]?.focus();
 };
 element("claim").onclick = () => { if (current && screenReady) send({ type: "claim", id: current.id, generation: current.generation }); };
-element("release").onclick = () => { stopKeyRepeat(); if (current) send({ type: "release", id: current.id, generation: current.generation }); };
+element("release").onclick = () => { resetKeyState(); if (current) send({ type: "release", id: current.id, generation: current.generation }); };
 element("send").onclick = submit;
 draft.oninput = () => {
   if (current) undoDrafts.delete(sessionKey(current));
@@ -475,13 +482,20 @@ function stopKeyRepeat(): void {
 }
 function pressKey(button: HTMLButtonElement, data: string): boolean {
   if (!input(data)) return false;
-  setCtrl(false);
+  setModifiers({});
   if (button.closest("#extra-keys")) closeSheet();
   return true;
 }
 const repeatableKeys = new Set(["backspace", "delete", "up", "down", "left", "right"]);
-element("ctrl-key").onpointerdown = event => { if (event.button === 0) event.preventDefault(); };
-element("ctrl-key").onclick = () => { stopKeyRepeat(); setCtrl(!ctrlPressed); };
+for (const name of modifierNames) {
+  const button = element<HTMLButtonElement>(`${name}-key`);
+  button.onpointerdown = event => { if (event.button === 0) event.preventDefault(); };
+  button.onclick = () => {
+    if (!ownsControl()) return;
+    stopKeyRepeat();
+    setModifiers({ ...modifiers, [name]: !modifiers[name] });
+  };
+}
 document.querySelectorAll<HTMLButtonElement>("[data-key]").forEach(button => {
   const key = button.dataset.key!;
   let pointerHandled = false;
@@ -493,7 +507,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-key]").forEach(button => {
     if (!repeatableKeys.has(key) || !current || !ownsControl()) return;
     pointerHandled = true;
     const target = sessionKey(current), epoch = current.epoch;
-    const data = terminalKey(key, terminal.modes.applicationCursorKeysMode, ctrlPressed);
+    const data = terminalKey(key, terminal.modes.applicationCursorKeysMode, modifiers);
     heldKey = { button, pointerId: event.pointerId };
     button.setAttribute("data-held", "true");
     button.setPointerCapture(event.pointerId);
@@ -515,7 +529,7 @@ document.querySelectorAll<HTMLButtonElement>("[data-key]").forEach(button => {
     // 指针按下时已发送，抑制松手后的 click；键盘和辅助技术仍使用 click。
     if (pointerHandled && (event.detail !== 0 || event instanceof PointerEvent && event.pointerType)) { pointerHandled = false; return; }
     stopKeyRepeat();
-    pressKey(button, terminalKey(key, terminal.modes.applicationCursorKeysMode, ctrlPressed));
+    pressKey(button, terminalKey(key, terminal.modes.applicationCursorKeysMode, modifiers));
   };
 });
 for (const name of ["pointerup", "pointercancel"] as const) {
@@ -524,8 +538,8 @@ for (const name of ["pointerup", "pointercancel"] as const) {
 document.addEventListener("pointerdown", event => {
   if (heldKey && (event.pointerId !== heldKey.pointerId || !heldKey.button.contains(event.target as Node))) stopKeyRepeat();
 }, true);
-window.addEventListener("blur", stopKeyRepeat);
-window.addEventListener("pagehide", stopKeyRepeat);
+window.addEventListener("blur", resetKeyState);
+window.addEventListener("pagehide", resetKeyState);
 for (const [id, delta] of [["font-smaller", -1], ["font-larger", 1]] as const) {
   element(id).onclick = () => {
     terminal.options.fontSize = Math.max(8, Math.min(24, terminal.options.fontSize! + delta));
@@ -547,7 +561,7 @@ viewport();
 window.visualViewport?.addEventListener("resize", viewport);
 window.addEventListener("resize", viewport);
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) stopKeyRepeat();
+  if (document.hidden) resetKeyState();
   if (document.visibilityState === "visible" && !connected() && !revoked) connect();
 });
 window.addEventListener("storage", event => {

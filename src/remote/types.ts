@@ -51,10 +51,32 @@ export function terminalInput(draft: string, appendEnter: boolean, bracketedPast
   return (bracketedPaste ? `\x1b[200~${text}\x1b[201~` : text) + (appendEnter ? "\r" : "");
 }
 
-export function terminalKey(key: string, applicationCursorKeys = false, ctrl = false): string {
+export interface TerminalModifiers {
+  ctrl?: boolean;
+  shift?: boolean;
+  alt?: boolean;
+}
+
+export function terminalKey(key: string, applicationCursorKeys = false, modifiers: TerminalModifiers = {}): string {
+  if (key === "shiftTab") return terminalKey("tab", applicationCursorKeys, { ...modifiers, shift: true });
   const value = REMOTE_KEYS[key];
   if (!value) return "";
-  if (ctrl && ["up", "down", "left", "right", "home", "end"].includes(key)) return `\x1b[1;5${value.slice(-1)}`;
-  if (ctrl && key === "tab") return "\x1b[27;5;9~";
-  return applicationCursorKeys && ["up", "down", "left", "right"].includes(key) ? value.replace("[", "O") : value;
+  const parameter = 1 + Number(Boolean(modifiers.shift)) + Number(Boolean(modifiers.alt)) * 2 + Number(Boolean(modifiers.ctrl)) * 4;
+  const modified = parameter !== 1;
+  if (["up", "down", "left", "right", "home", "end"].includes(key)) {
+    if (modified) return `\x1b[1;${parameter}${value.slice(-1)}`;
+    return applicationCursorKeys && ["up", "down", "left", "right"].includes(key) ? value.replace("[", "O") : value;
+  }
+  if (key === "tab") {
+    if (modifiers.shift && parameter === 2) return "\x1b[Z";
+    return modified ? `\x1b[27;${parameter};9~` : value;
+  }
+  if (["pageUp", "pageDown", "delete"].includes(key)) return modified ? value.replace("~", `;${parameter}~`) : value;
+  if (key === "backspace") {
+    const backspace = modifiers.ctrl ? "\x08" : value;
+    return modifiers.alt ? `\x1b${backspace}` : backspace;
+  }
+  if (key === "enter") return modifiers.alt ? `\x1b${value}` : value;
+  if (key === "escape") return modifiers.alt ? `\x1b${value}` : value;
+  return value;
 }

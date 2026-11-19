@@ -141,10 +141,14 @@ button:disabled { opacity: .45; cursor: default; }
   #draft { font-size: 13px; min-height: 54px; }
   .client-sheet { width: 390px; margin-left: auto; border-left: 1px solid #55555f; }
 }
-@media (max-width: 540px) {
-  #keys { display: grid; grid-template-columns: repeat(6, minmax(44px, 1fr)); }
+@media (max-width: 760px) {
+  #keys { display: grid; grid-template-columns: repeat(7, minmax(44px, 1fr)); }
   #keys > button { min-width: 0; }
   #more-keys { grid-column: span 2; }
+}
+@media (max-width: 335px) {
+  #keys { grid-template-columns: repeat(6, minmax(44px, 1fr)); }
+  #more-keys { grid-column: span 6; }
 }
 @media (max-height: 550px) {
   .client-header { min-height: 44px; padding-top: 0; padding-bottom: 0; }

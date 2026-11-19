@@ -4,6 +4,12 @@ All notable changes to sTerm are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-11-19
+
+### Added
+
+- Add remote Shift and Alt modifier buttons alongside Ctrl, with stacked navigation combinations, one-shot reset, and preserved modifiers during held-key repetition.
+
 ## [0.2.4] - 2026-11-18
 
 ### Added

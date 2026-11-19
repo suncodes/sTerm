@@ -121,9 +121,9 @@ test("default permissions preserve explicit exceptions and reject malformed stor
 
 test("shortcut modifiers preserve application cursor mode and control sequences", () => {
   assert.equal(terminalKey("left", true), "\x1bOD");
-  assert.equal(terminalKey("left", true, true), "\x1b[1;5D");
-  assert.equal(terminalKey("home", false, true), "\x1b[1;5H");
-  assert.equal(terminalKey("tab", false, true), "\x1b[27;5;9~");
+  assert.equal(terminalKey("left", true, { ctrl: true }), "\x1b[1;5D");
+  assert.equal(terminalKey("home", false, { ctrl: true }), "\x1b[1;5H");
+  assert.equal(terminalKey("tab", false, { ctrl: true }), "\x1b[27;5;9~");
   assert.equal(terminalKey("shiftTab"), "\x1b[Z");
   assert.equal(terminalKey("ctrlD"), "\x04");
   assert.equal(terminalKey("ctrlL"), "\x0c");
@@ -132,6 +132,42 @@ test("shortcut modifiers preserve application cursor mode and control sequences"
   assert.equal(terminalKey("delete"), "\x1b[3~");
   assert.equal(terminalKey("enter"), "\r");
   assert.equal(terminalKey("unknown"), "");
+});
+
+test("Shift, Alt and Ctrl navigation combinations preserve every modifier in both cursor modes", () => {
+  const combinations = [
+    [{ shift: true }, 2], [{ alt: true }, 3], [{ shift: true, alt: true }, 4],
+    [{ ctrl: true }, 5], [{ ctrl: true, shift: true }, 6], [{ ctrl: true, alt: true }, 7],
+    [{ ctrl: true, shift: true, alt: true }, 8],
+  ];
+  for (const [modifiers, parameter] of combinations) for (const application of [false, true]) {
+    for (const [key, suffix] of [["up", "A"], ["down", "B"], ["left", "D"], ["right", "C"], ["home", "H"], ["end", "F"]]) {
+      assert.equal(terminalKey(key, application, modifiers), `\x1b[1;${parameter}${suffix}`);
+    }
+    for (const [key, code] of [["delete", 3], ["pageUp", 5], ["pageDown", 6]]) {
+      assert.equal(terminalKey(key, application, modifiers), `\x1b[${code};${parameter}~`);
+    }
+  }
+  assert.equal(terminalKey("left", true, { ctrl: false, alt: false, shift: false }), "\x1bOD");
+});
+
+test("modified Tab, Backspace and Enter preserve terminal encodings without changing text drafts", () => {
+  assert.equal(terminalKey("tab", false, { shift: true }), "\x1b[Z");
+  assert.equal(terminalKey("tab", false, { alt: true }), "\x1b[27;3;9~");
+  assert.equal(terminalKey("tab", false, { ctrl: true, shift: true }), "\x1b[27;6;9~");
+  assert.equal(terminalKey("shiftTab", false, { ctrl: true }), "\x1b[27;6;9~");
+  assert.equal(terminalKey("backspace", false, { ctrl: true }), "\x08");
+  assert.equal(terminalKey("backspace", false, { alt: true }), "\x1b\x7f");
+  assert.equal(terminalKey("backspace", false, { ctrl: true, alt: true }), "\x1b\x08");
+  assert.equal(terminalKey("backspace", false, { shift: true }), "\x7f");
+  assert.equal(terminalKey("enter", false, { alt: true }), "\x1b\r");
+  assert.equal(terminalKey("enter", false, { ctrl: true, shift: true }), "\r");
+  assert.equal(terminalKey("escape", false, { alt: true }), "\x1b\x1b");
+  assert.equal(terminalKey("ctrlC", false, { shift: true, alt: true }), "\x03");
+  assert.equal(terminalKey("A", false, { ctrl: true }), "");
+  assert.equal(terminalKey("1", false, { alt: true }), "");
+  assert.equal(terminalKey("@", false, { ctrl: true }), "");
+  assert.equal(terminalInput("保留中文\nAa1!", false), "保留中文\rAa1!");
 });
 
 test("held keys send once immediately, repeat after a delay, and stop without an extra release key", context => {
