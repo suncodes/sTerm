@@ -37,7 +37,6 @@ struct ExitPayload {
 struct Pty {
     generation: u32,
     input: Mutex<PtyInput>,
-    input_revision: Arc<AtomicU64>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     shell_pid: Option<u32>,
@@ -46,6 +45,27 @@ struct Pty {
 struct PtyInput {
     writer: Box<dyn Write + Send>,
     agent: AgentTurn,
+    revision: Arc<AtomicU64>,
+}
+
+impl PtyInput {
+    fn write(&mut self, data: &str, protocol_reply: bool) -> std::io::Result<()> {
+        if !protocol_reply { self.revision.fetch_add(1, Ordering::Relaxed); }
+        self.writer.write_all(data.as_bytes())
+    }
+
+    fn submit(&mut self, revision: u64, text: &str, paste: bool) -> Result<(), String> {
+        if self.revision.load(Ordering::Relaxed) != revision {
+            return Err("提交期间终端收到其他输入，请稍后重试".into());
+        }
+        let data = self.agent.take_input(text, paste)?;
+        self.revision.fetch_add(1, Ordering::Relaxed);
+        if write_agent_input(self.writer.as_mut(), data).is_err() {
+            self.agent.reject_input();
+            return Err("终端写入失败，请打开远程终端确认输入".into());
+        }
+        Ok(())
+    }
 }
 
 pub struct PtyManager {
@@ -114,8 +134,7 @@ impl PtyManager {
         let input_revision = Arc::new(AtomicU64::new(0));
         let pty = Arc::new(Pty {
             generation,
-            input: Mutex::new(PtyInput { writer, agent: AgentTurn::default() }),
-            input_revision: input_revision.clone(),
+            input: Mutex::new(PtyInput { writer, agent: AgentTurn::default(), revision: input_revision.clone() }),
             master: Mutex::new(pair.master),
             killer: Mutex::new(child.clone_killer()),
             shell_pid,
@@ -196,11 +215,7 @@ impl PtyManager {
     pub fn write_input(&self, id: u32, generation: u32, data: &str, protocol_reply: bool) -> Result<(), String> {
         let pty = self.get(id, generation)?;
         let mut input = pty.input.lock().unwrap();
-        if !protocol_reply {
-            pty.input_revision.fetch_add(1, Ordering::Relaxed);
-            input.agent.invalidate_input();
-        }
-        input.writer.write_all(data.as_bytes()).map_err(|error| {
+        input.write(data, protocol_reply).map_err(|error| {
             diagnostics::record(&format!(
                 "write failed tab={id} generation={generation}: {error}"
             ));
@@ -208,24 +223,22 @@ impl PtyManager {
         })
     }
 
-    pub fn report_agent_event(&self, id: u32, generation: u32, agent: &str, event: AgentEvent, paste: bool, observed: Option<u64>) -> bool {
+    pub fn report_agent_event(&self, id: u32, generation: u32, agent: &str, event: AgentEvent) -> bool {
         let Ok(pty) = self.get(id, generation) else { return false };
         let mut input = pty.input.lock().unwrap();
-        let revision = pty.input_revision.load(Ordering::Relaxed);
-        input.agent.report(agent, event, paste, observed, revision)
+        input.agent.report(agent, event)
     }
 
-    pub fn submit_agent_text(&self, id: u32, generation: u32, text: &str) -> Result<(), String> {
+    pub fn input_revision(&self, id: u32, generation: u32) -> Result<u64, String> {
+        let pty = self.get(id, generation)?;
+        let revision = pty.input.lock().unwrap().revision.load(Ordering::Relaxed);
+        Ok(revision)
+    }
+
+    pub fn submit_agent_text(&self, id: u32, generation: u32, revision: u64, text: &str, paste: bool) -> Result<(), String> {
         let pty = self.get(id, generation).map_err(|_| "原会话已失效")?;
         let mut input = pty.input.lock().unwrap();
-        let revision = pty.input_revision.load(Ordering::Relaxed);
-        let data = input.agent.take_input(revision, text)?;
-        pty.input_revision.fetch_add(1, Ordering::Relaxed);
-        if write_agent_input(input.writer.as_mut(), data).is_err() {
-            input.agent.reject_input();
-            return Err("终端写入失败，请打开远程终端确认输入".into());
-        }
-        Ok(())
+        input.submit(revision, text, paste)
     }
 
     pub fn resize(&self, id: u32, generation: u32, cols: u16, rows: u16) -> Result<(), String> {
@@ -373,6 +386,88 @@ mod tests {
     use super::*;
     use std::time::Instant;
 
+    #[derive(Clone, Default)]
+    struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedWriter {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(data);
+            Ok(data.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+
+    fn ready_input(agent: &str) -> (PtyInput, SharedWriter) {
+        let writer = SharedWriter::default();
+        let mut state = AgentTurn::default();
+        state.report(agent, AgentEvent::Prompt);
+        assert!(state.report(agent, AgentEvent::Complete));
+        (PtyInput { writer: Box::new(writer.clone()), agent: state, revision: Arc::new(AtomicU64::new(0)) }, writer)
+    }
+
+    #[test]
+    fn local_editing_never_invalidates_a_ready_agent() {
+        for agent in ["claude", "pi", "codex"] {
+            for edits in [vec!["draft", "\x7f\x7f\x7f\x7f\x7f"], vec!["\x1b[D", "\x1b[C", "\x1b[H", "\x1b[F"], vec!["existing draft"]] {
+                let (mut input, writer) = ready_input(agent);
+                for edit in &edits { input.write(edit, false).unwrap(); }
+                let prefix = writer.0.lock().unwrap().clone();
+                let revision = input.revision.load(Ordering::Relaxed);
+                input.submit(revision, "飞书续问", true).unwrap();
+                let actual = writer.0.lock().unwrap().clone();
+                assert_eq!(&actual[..prefix.len()], prefix);
+                assert_eq!(&actual[prefix.len()..], "\x1b[200~飞书续问\x1b[201~\r".as_bytes(), "{agent}");
+                assert!(input.submit(input.revision.load(Ordering::Relaxed), "重复", true).unwrap_err().contains("提交"));
+            }
+        }
+    }
+
+    #[test]
+    fn concurrent_input_rejects_only_the_current_request() {
+        let (mut input, writer) = ready_input("claude");
+        let previous = input.revision.load(Ordering::Relaxed);
+        input.write("local", false).unwrap();
+        assert!(input.submit(previous, "飞书续问", true).unwrap_err().contains("提交期间"));
+        assert_eq!(*writer.0.lock().unwrap(), b"local");
+        let current = input.revision.load(Ordering::Relaxed);
+        input.write("\x1b[I", true).unwrap();
+        input.write("\x1b[1;1R", true).unwrap();
+        assert_eq!(input.revision.load(Ordering::Relaxed), current);
+        assert!(input.submit(current, "重新发送", true).is_ok());
+    }
+
+    #[test]
+    fn submission_rechecks_the_current_agent_state() {
+        let (mut input, writer) = ready_input("pi");
+        input.agent.report("pi", AgentEvent::Prompt);
+        assert!(input.submit(0, "继续", true).unwrap_err().contains("运行"));
+        input.agent.report("pi", AgentEvent::Blocked);
+        assert!(input.submit(0, "继续", true).unwrap_err().contains("等待"));
+        assert!(writer.0.lock().unwrap().is_empty());
+        input.agent.report("pi", AgentEvent::Ready);
+        assert!(input.submit(0, "继续", true).is_ok());
+    }
+
+    #[test]
+    fn concurrent_bot_submissions_write_exactly_one_prompt() {
+        let (input, writer) = ready_input("claude");
+        let input = Arc::new(Mutex::new(input));
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let handles: Vec<_> = (0..2).map(|_| {
+            let input = input.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                input.lock().unwrap().submit(0, "继续", true)
+            })
+        }).collect();
+        barrier.wait();
+        let accepted = handles.into_iter().map(|handle| handle.join().unwrap()).filter(Result::is_ok).count();
+        assert_eq!(accepted, 1);
+        assert_eq!(*writer.0.lock().unwrap(), "\x1b[200~继续\x1b[201~\r".as_bytes());
+    }
+
     #[derive(Default)]
     struct RecordingWriter {
         writes: Vec<(Instant, Vec<u8>)>,
@@ -396,9 +491,9 @@ mod tests {
 
     fn completed_input(agent: &str) -> AgentInput {
         let mut turn = AgentTurn::default();
-        turn.report(agent, AgentEvent::Prompt, true, None, 0);
-        assert!(turn.report(agent, AgentEvent::Complete, true, Some(0), 0));
-        turn.take_input(0, "第一段\n\n第三段").unwrap()
+        turn.report(agent, AgentEvent::Prompt);
+        assert!(turn.report(agent, AgentEvent::Complete));
+        turn.take_input("第一段\n\n第三段", true).unwrap()
     }
 
     #[test]

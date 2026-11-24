@@ -45,7 +45,7 @@ export function renderFeishuSettings(): { page: HTMLElement; dispose: () => void
   const hint = element("p", "feishu-hint", "清空 Open ID 后可开启全员续问。名单为空且开关关闭时只发通知。续问时请在完成通知的话题中 @ 机器人。");
   const sendTitle = element("input", "settings-switch");
   sendTitle.type = "checkbox";
-  const titleRow = element("label", "settings-row settings-toggle-row", "在卡片显示终端标签名");
+  const titleRow = element("label", "settings-row settings-toggle-row", "在卡片标题显示会话名称");
   titleRow.append(sendTitle);
   const status = element("p", "feishu-status", "正在读取设置…");
   status.setAttribute("role", "status");

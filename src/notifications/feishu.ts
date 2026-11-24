@@ -41,7 +41,7 @@ export class FeishuNotifications {
       void (async () => {
         const ready = await session?.allowsAgentInput(generation) ?? false;
         await this.reports.get(id);
-        await invoke("feishu_input_result", { request, ready });
+        await invoke("feishu_input_result", { request, ready, paste: session?.term.modes.bracketedPasteMode ?? false });
       })().catch(() => console.warn("飞书续问确认失败"));
     });
     const settings = await invoke<FeishuSettings>("feishu_settings");
@@ -49,11 +49,10 @@ export class FeishuNotifications {
     window.addEventListener("beforeunload", () => this.keepAlive.setEnabled(false), { once: true });
   }
 
-  report(session: TerminalSession, event: AgentEvent, inputRevision?: number): void {
+  report(session: TerminalSession, event: AgentEvent): void {
     const { id, generation, title } = session.remoteInfo();
     const report = {
       id, generation, title, agent: event.agent, event: event.event,
-      paste: session.term.modes.bracketedPasteMode, inputRevision,
     };
     const operation = Promise.resolve(this.reports.get(id))
       .then(() => invoke<void>("feishu_agent_event", { report }))

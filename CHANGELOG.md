@@ -4,6 +4,13 @@ All notable changes to sTerm are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-11-24
+
+### Fixed
+
+- Allow Feishu follow-up whenever the bound Agent is ready, regardless of earlier terminal editing; keep completion notifications independent and reject only current busy states, remote control, or concurrent input during submission.
+- Use the session name as the Feishu completion card title when name display is enabled, and display completion times in UTC+08:00.
+
 ## [0.2.6] - 2026-11-24
 
 ### Added

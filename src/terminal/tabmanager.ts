@@ -9,7 +9,6 @@ interface OutputPayload {
   id: number;
   generation: number;
   data: string;
-  inputRevision?: number;
 }
 
 interface ExitPayload {
@@ -20,7 +19,7 @@ interface ExitPayload {
 export interface TabManagerOptions {
   /** 状态、名称、活动标签及会话增删的统一通知。 */
   onSessionsChange?: (tabs: TabManager) => void;
-  onAgentEvent?: (session: TerminalSession, event: AgentEvent, inputRevision?: number) => void;
+  onAgentEvent?: (session: TerminalSession, event: AgentEvent) => void;
   tabsEl: HTMLElement;
   panesEl: HTMLElement;
   shell: ShellInfo;
@@ -65,7 +64,7 @@ export class TabManager {
     // 全局 PTY 事件 → 按会话 id 分发
     this.listenersReady = Promise.all([
       listen<OutputPayload>("pty-output", (e) => {
-        this.byId(e.payload.id)?.handleOutput(e.payload.generation, b64ToU8(e.payload.data), e.payload.inputRevision);
+        this.byId(e.payload.id)?.handleOutput(e.payload.generation, b64ToU8(e.payload.data));
       }),
       listen<ExitPayload>("pty-exit", (e) => {
         this.byId(e.payload.id)?.handleExit(e.payload.generation);

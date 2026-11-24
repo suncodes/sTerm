@@ -72,7 +72,7 @@ async function main(): Promise<void> {
     panesEl: document.getElementById("panes")!,
     shell,
     onAgent: (session, agent) => agentFlow(session, agent, store),
-    onAgentEvent: (session, event, revision) => notifications.report(session, event, revision),
+    onAgentEvent: (session, event) => notifications.report(session, event),
     onSidebarToggle: toggleSidebar,
     onSearchOpen: () => openSearch(),
     onSessionsChange: (manager) => {

@@ -39,7 +39,7 @@ export interface SessionOptions {
   onAgent: (session: TerminalSession, agent: AgentName) => void;
   /** Agent 状态变化（running/idle/exited），用于标签状态点 */
   onAgentStatus?: (session: TerminalSession) => void;
-  onAgentEvent?: (session: TerminalSession, event: AgentEvent, inputRevision?: number) => void;
+  onAgentEvent?: (session: TerminalSession, event: AgentEvent) => void;
   onSidebarToggle?: () => void;
   onNewTab?: () => void;
   onCloseTab?: () => void;
@@ -77,13 +77,11 @@ export class TerminalSession {
   private inputListener: IDisposable;
   private tracker = new LineTracker();
   private opts: SessionOptions;
-  private outQueue: { data: Uint8Array; inputRevision?: number }[] = [];
+  private outQueue: Uint8Array[] = [];
   private mouseModeFilter = new MouseModeFilter();
   private outputGeneration = 0;
-  private outputInputRevision: number | undefined;
-  private queuedInputRevision: number | undefined;
   private queuedOutputGeneration = 0;
-  private agentOsc = new AgentOscChannel(event => this.applyAgentEvent(event, this.outputInputRevision));
+  private agentOsc = new AgentOscChannel(event => this.applyAgentEvent(event));
   private flushTimer: number | null = null;
   private alive = false;
   private remoteShared = false;
@@ -266,7 +264,6 @@ export class TerminalSession {
     this.ptySentCols = 0;
     this.ptySentRows = 0;
     this.outQueue = [];
-    this.queuedInputRevision = undefined;
     this.mouseModeFilter.reset();
     this.overlay.classList.add("hidden");
     try {
@@ -355,8 +352,8 @@ export class TerminalSession {
 
   /* ---------- TabManager 分发的事件 ---------- */
 
-  handleOutput(generation: number, u: Uint8Array, inputRevision?: number): void {
-    if (!this.disposed && generation === this.generation) this.enqueue(u, inputRevision);
+  handleOutput(generation: number, u: Uint8Array): void {
+    if (!this.disposed && generation === this.generation) this.enqueue(u);
   }
 
   /** 事件信箱分发来的 Pi 扩展事件。 */
@@ -367,9 +364,9 @@ export class TerminalSession {
     if (event) this.applyAgentEvent(event);
   }
 
-  private applyAgentEvent(event: AgentEvent, inputRevision?: number): void {
+  private applyAgentEvent(event: AgentEvent): void {
     this.agentState.markAgentEvent(event.agent, event.event);
-    this.opts.onAgentEvent?.(this, event, inputRevision);
+    this.opts.onAgentEvent?.(this, event);
   }
 
   handleExit(generation: number): void {
@@ -424,8 +421,8 @@ export class TerminalSession {
 
   /* ---------- 输出合并：把高频数据攒成 8ms 一批 ---------- */
 
-  private enqueue(data: Uint8Array, inputRevision?: number): void {
-    this.outQueue.push({ data, inputRevision });
+  private enqueue(data: Uint8Array): void {
+    this.outQueue.push(data);
     // 最小化时不叠加输出合并定时器，状态序列及时进入 xterm 的解析队列。
     if (document.visibilityState === "hidden") {
       if (this.flushTimer !== null) window.clearTimeout(this.flushTimer);
@@ -442,17 +439,8 @@ export class TerminalSession {
     const q = this.outQueue;
     this.outQueue = [];
     if (q.length === 0) return;
-    let text = "";
-    let revision = q[0].inputRevision;
-    for (const output of q) {
-      if (output.inputRevision !== revision) {
-        if (text) this.writeOutput(text, revision);
-        text = "";
-        revision = output.inputRevision;
-      }
-      text += this.mouseModeFilter.filter(output.data);
-    }
-    if (text) this.writeOutput(text, revision);
+    const text = q.map(output => this.mouseModeFilter.filter(output)).join("");
+    if (text) this.writeOutput(text);
   }
 
   private acceptsOutput(): boolean {
@@ -460,16 +448,12 @@ export class TerminalSession {
       && this.exitedGeneration !== this.generation;
   }
 
-  private writeOutput(text: string, inputRevision?: number): void {
+  private writeOutput(text: string): void {
     const generation = this.generation;
     if (this.queuedOutputGeneration !== generation) {
       this.queuedOutputGeneration = generation;
       // CAN 结束上一代未完成的控制序列；标记与输出在 xterm 队列中保持顺序。
-      this.term.write("\x18", () => { this.outputGeneration = generation; this.outputInputRevision = undefined; this.pendingSequence.reset(); });
-    }
-    if (this.queuedInputRevision !== inputRevision) {
-      this.queuedInputRevision = inputRevision;
-      this.term.write("", () => { this.outputInputRevision = inputRevision; });
+      this.term.write("\x18", () => { this.outputGeneration = generation; this.pendingSequence.reset(); });
     }
     for (let index = 0; index < text.length;) {
       let end = Math.min(index + 32768, text.length);

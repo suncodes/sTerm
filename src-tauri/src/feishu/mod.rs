@@ -103,13 +103,12 @@ pub struct AgentReport {
     title: String,
     agent: String,
     event: AgentEvent,
-    paste: bool,
-    input_revision: Option<u64>,
 }
 
 struct FollowUp {
     key: SessionKey,
     revision: u64,
+    input_revision: u64,
     text: String,
     result: oneshot::Sender<Result<(), String>>,
 }
@@ -393,11 +392,13 @@ impl State {
 
     async fn submit(&self, app: &AppHandle, revision: u64, key: SessionKey, text: String) -> Result<(), String> {
         let request = Uuid::new_v4();
+        let input_revision = app.state::<AppState>().ptys.input_revision(key.id, key.generation)
+            .map_err(|_| "原会话已失效")?;
         let (result, response) = oneshot::channel();
         {
             let inner = self.inner.lock().unwrap();
             if inner.revision != revision || !inner.config.enabled { return Err("飞书续问已关闭".into()); }
-            self.pending.lock().unwrap().insert(request, FollowUp { key, revision, text, result });
+            self.pending.lock().unwrap().insert(request, FollowUp { key, revision, input_revision, text, result });
         }
         if app.emit_to("main", "feishu-input", json!({
             "request": request.to_string(), "id": key.id, "generation": key.generation
@@ -417,12 +418,12 @@ impl State {
 
 fn completed_card(title: &str, agent: &str, id: u32, at: SystemTime, link: Option<String>) -> Value {
     let agent = match agent { "claude" => "Claude Code", "codex" => "Codex", "pi" => "Pi", _ => "Agent" };
-    let note = format!("{}\n{} · 会话 #{} · {}", title, agent, id, utc_time(at));
+    let note = format!("{} 已完成 · 会话 #{}\n{}", agent, id, completion_time(at));
     let mut elements = vec![json!({"tag":"div", "text":{"tag":"plain_text", "content":note}})];
     if let Some(url) = link {
         elements.extend(remote_link_elements(url));
     }
-    json!({"config":{"wide_screen_mode":true},"header":{"template":"green","title":{"tag":"plain_text","content":"sTerm · Agent 已完成"}},
+    json!({"config":{"wide_screen_mode":true},"header":{"template":"green","title":{"tag":"plain_text","content":title}},
         "elements":elements})
 }
 
@@ -439,9 +440,10 @@ fn remote_link_elements(url: String) -> [Value; 2] {
     ]
 }
 
-fn utc_time(at: SystemTime) -> String {
-    let date_time = time::OffsetDateTime::from(at);
-    format!("{} {:02}:{:02} UTC", date_time.date(), date_time.hour(), date_time.minute())
+fn completion_time(at: SystemTime) -> String {
+    let offset = time::UtcOffset::from_hms(8, 0, 0).expect("有效的东八区偏移");
+    let date_time = time::OffsetDateTime::from(at).to_offset(offset);
+    format!("{} {:02}:{:02} UTC+08:00", date_time.date(), date_time.hour(), date_time.minute())
 }
 
 fn desktop(window: &WebviewWindow) -> Result<(), String> {
@@ -508,7 +510,7 @@ pub fn feishu_agent_event(app: AppHandle, window: WebviewWindow, report: AgentRe
     desktop(&window)?;
     let app_state = app.state::<AppState>();
     let ptys = &app_state.ptys;
-    let completed = ptys.report_agent_event(report.id, report.generation, &report.agent, report.event, report.paste, report.input_revision);
+    let completed = ptys.report_agent_event(report.id, report.generation, &report.agent, report.event);
     if completed {
         app.state::<State>().push(&app, Completion {
             key: SessionKey { id: report.id, generation: report.generation },
@@ -521,11 +523,11 @@ pub fn feishu_agent_event(app: AppHandle, window: WebviewWindow, report: AgentRe
 }
 
 #[tauri::command]
-pub async fn feishu_input_result(app: AppHandle, window: WebviewWindow, request: String, ready: bool) -> Result<(), String> {
+pub async fn feishu_input_result(app: AppHandle, window: WebviewWindow, request: String, ready: bool, paste: bool) -> Result<(), String> {
     desktop(&window)?;
     let request = Uuid::parse_str(&request).map_err(|_| "无效的飞书输入请求")?;
     let state = app.state::<State>();
-    let Some(FollowUp { key, revision, text, result: response }) = state.pending.lock().unwrap().remove(&request) else { return Ok(()) };
+    let Some(FollowUp { key, revision, input_revision, text, result: response }) = state.pending.lock().unwrap().remove(&request) else { return Ok(()) };
     let result = if ready {
         tauri::async_runtime::spawn_blocking(move || {
             let state = app.state::<State>();
@@ -536,7 +538,7 @@ pub async fn feishu_input_result(app: AppHandle, window: WebviewWindow, request:
                 }
             }
             let app_state = app.state::<AppState>();
-            let write = || app_state.ptys.submit_agent_text(key.id, key.generation, &text);
+            let write = || app_state.ptys.submit_agent_text(key.id, key.generation, input_revision, &text, paste);
             let result = match app.state::<crate::remote::RemoteState>().current() {
                 Some(hub) => hub.with_unclaimed_input(key.id, key.generation, write),
                 None => write(),
@@ -575,8 +577,12 @@ mod tests {
     #[test]
     fn card_contains_only_session_metadata_and_the_optional_target() {
         let card = completed_card("后端", "codex", 2, SystemTime::UNIX_EPOCH, Some("https://example.com/#session=target".into()));
-        assert_eq!(card["elements"][0]["text"]["content"], "后端\nCodex · 会话 #2 · 1970-01-01 00:00 UTC");
+        assert_eq!(card["header"]["title"]["content"], "后端");
+        assert_eq!(card["elements"][0]["text"]["content"], "Codex 已完成 · 会话 #2\n1970-01-01 08:00 UTC+08:00");
         assert_eq!(card["elements"][1]["actions"][0]["url"], "https://example.com/#session=target");
-        assert_eq!(completed_card("前端", "pi", 1, SystemTime::UNIX_EPOCH, None)["elements"].as_array().unwrap().len(), 1);
+        let next_day = completed_card("前端", "pi", 1, SystemTime::UNIX_EPOCH + Duration::from_secs(20 * 60 * 60), None);
+        assert_eq!(next_day["header"]["title"]["content"], "前端");
+        assert_eq!(next_day["elements"][0]["text"]["content"], "Pi 已完成 · 会话 #1\n1970-01-02 04:00 UTC+08:00");
+        assert_eq!(next_day["elements"].as_array().unwrap().len(), 1);
     }
 }
