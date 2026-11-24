@@ -1334,3 +1334,23 @@ body.resizing * { pointer-events: none; }
 .settings-opacity-hint { margin-top: 4px; }
 .settings-error { color: #ffb4a9; font-size: 11px; line-height: 1.6; margin-top: 12px; overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) { .settings-switch::before { transition: none; } }
+
+/* 飞书通知设置 */
+.feishu-form { display: grid; gap: 12px; margin-top: 12px; }
+.feishu-field { display: grid; gap: 6px; font-size: 13px; }
+.feishu-input {
+  width: 100%;
+  min-height: 34px;
+  box-sizing: border-box;
+  border: 1px solid var(--border, #3b4350);
+  border-radius: 5px;
+  padding: 6px 9px;
+  background: var(--bg, #16191f);
+  color: var(--fg, #ebedf0);
+  font: inherit;
+}
+.feishu-input:focus { border-color: var(--accent, #6a9ff5); }
+.feishu-hint, .feishu-status, .feishu-feedback { margin: 0; font-size: 12px; line-height: 1.5; color: var(--fg-dim, #a3abb8); }
+.feishu-feedback:empty { display: none; }
+.feishu-form .error { color: #f29090; }
+.feishu-actions { display: flex; flex-wrap: wrap; gap: 8px; }

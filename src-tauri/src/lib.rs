@@ -1,7 +1,9 @@
+mod agent_turn;
 mod agents;
 mod console;
 mod diagnostics;
 mod events;
+mod feishu;
 mod overlay;
 mod pty;
 mod remote;
@@ -45,6 +47,7 @@ fn pty_spawn(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
+    app.state::<feishu::State>().replaced(id, generation);
     state.ptys.spawn(app, id, generation, &shell_id, cwd, cols, rows)
 }
 
@@ -57,11 +60,12 @@ fn pty_write(
     data: String,
     protocol_reply: Option<bool>,
 ) -> Result<(), String> {
-    if protocol_reply != Some(true) && app.state::<remote::RemoteState>().current()
-        .is_some_and(|hub| !hub.local_write_allowed(id, generation)) {
-        return Err("手机正在控制此会话，请先在远程面板收回控制权".into());
+    if protocol_reply != Some(true) {
+        if let Some(hub) = app.state::<remote::RemoteState>().current() {
+            return hub.with_unclaimed_input(id, generation, || state.ptys.write(id, generation, &data));
+        }
     }
-    state.ptys.write(id, generation, &data)
+    state.ptys.write_input(id, generation, &data, protocol_reply == Some(true))
 }
 
 #[tauri::command]
@@ -83,6 +87,7 @@ fn pty_kill(
     generation: u32,
 ) -> Result<(), String> {
     if let Some(hub) = app.state::<remote::RemoteState>().current() { hub.unshare(id, generation); }
+    app.state::<feishu::State>().closed(id, generation);
     state.ptys.kill(id, generation)
 }
 
@@ -281,31 +286,7 @@ fn ws_move(app: AppHandle, state: tauri::State<AppState>, id: String, folder_id:
     Ok(())
 }
 
-const PI_EXTENSION: &str = r#"// sTerm agent 状态事件桥：pi 生命周期事件 → sTerm 事件信箱
-// 守卫：仅当由 sTerm 启动（STERM_TAB_ID 存在）时写入，其余环境零副作用
-import { appendFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
-
-const tab = process.env.STERM_TAB_ID;
-const base = join(process.env.LOCALAPPDATA ?? "", "sTerm", "events");
-
-function write(kind: string) {
-  if (!tab) return;
-  try {
-    mkdirSync(base, { recursive: true });
-    appendFileSync(join(base, `${tab}.event`), `pi-${kind}\n`);
-  } catch {
-    // 写失败不影响 pi 本身
-  }
-}
-
-export default function (pi: { on: (ev: string, cb: () => void) => void }) {
-  pi.on("session_start", () => write("start"));
-  pi.on("agent_start", () => write("prompt"));
-  pi.on("agent_end", () => write("stop"));
-  pi.on("session_shutdown", () => write("end"));
-}
-"#;
+const PI_EXTENSION: &str = include_str!("../../integrations/sterm-events.ts");
 
 fn pi_agent_dir() -> Option<PathBuf> {
     std::env::var_os("PI_CODING_AGENT_DIR")
@@ -529,6 +510,7 @@ pub fn run() {
             app.manage(overlay::OverlayState::load(app.handle())?);
             app.manage(remote::RemoteState::default());
             app.manage(tunnel::TunnelState::default());
+            app.manage(feishu::State::default());
             app.manage(AppState {
                 ptys: pty::PtyManager::new(),
                 ws: store,
@@ -536,6 +518,7 @@ pub fn run() {
             // Pi 扩展事件信箱：初始化目录并轮询状态。
             events::init()?;
             events::spawn_poller(app.handle().clone());
+            app.state::<feishu::State>().initialize(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -543,6 +526,7 @@ pub fn run() {
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
                 let _ = window.app_handle().state::<tunnel::TunnelState>().stop();
                 window.app_handle().state::<remote::RemoteState>().stop();
+                window.app_handle().state::<feishu::State>().stop();
                 if let Some(state) = window.app_handle().try_state::<AppState>() {
                     state.ptys.kill_all();
                 }
@@ -551,6 +535,12 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            feishu::feishu_settings,
+            feishu::feishu_save,
+            feishu::feishu_set_enabled,
+            feishu::feishu_test,
+            feishu::feishu_agent_event,
+            feishu::feishu_input_result,
             remote::remote_start,
             remote::remote_status,
             remote::remote_pair,

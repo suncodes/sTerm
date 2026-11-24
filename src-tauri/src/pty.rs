@@ -4,10 +4,10 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter};
+use std::sync::{atomic::{AtomicU64, Ordering}, Arc, Mutex};
+use tauri::{AppHandle, Emitter, Manager};
 
-use crate::{diagnostics, events};
+use crate::{agent_turn::{AgentEvent, AgentInput, AgentTurn}, diagnostics, events};
 
 #[derive(Clone, Serialize)]
 pub struct ShellInfo {
@@ -18,10 +18,12 @@ pub struct ShellInfo {
 }
 
 #[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct OutputPayload {
     id: u32,
     generation: u32,
     data: String,
+    input_revision: u64,
 }
 
 #[derive(Serialize, Clone)]
@@ -34,10 +36,16 @@ struct ExitPayload {
 
 struct Pty {
     generation: u32,
-    writer: Mutex<Box<dyn Write + Send>>,
+    input: Mutex<PtyInput>,
+    input_revision: Arc<AtomicU64>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     shell_pid: Option<u32>,
+}
+
+struct PtyInput {
+    writer: Box<dyn Write + Send>,
+    agent: AgentTurn,
 }
 
 pub struct PtyManager {
@@ -103,14 +111,17 @@ impl PtyManager {
         let shell_pid = child.process_id();
         drop(pair.slave);
 
+        let input_revision = Arc::new(AtomicU64::new(0));
         let pty = Arc::new(Pty {
             generation,
-            writer: Mutex::new(writer),
+            input: Mutex::new(PtyInput { writer, agent: AgentTurn::default() }),
+            input_revision: input_revision.clone(),
             master: Mutex::new(pair.master),
             killer: Mutex::new(child.clone_killer()),
             shell_pid,
         });
         self.ptys.lock().unwrap().insert(id, pty);
+        app.state::<crate::feishu::State>().opened(id, generation);
         diagnostics::record(&format!(
             "spawn tab={id} generation={generation} shell={shell_id} pid={shell_pid:?} size={cols}x{rows}"
         ));
@@ -138,6 +149,7 @@ impl PtyManager {
                                 id,
                                 generation,
                                 data,
+                                input_revision: input_revision.load(Ordering::Relaxed),
                             },
                         );
                     }
@@ -162,6 +174,7 @@ impl PtyManager {
                 }
             };
             events::retire(id, generation);
+            app.state::<crate::feishu::State>().closed(id, generation);
             drop(old);
             let _ = app.emit(
                 "pty-exit",
@@ -177,14 +190,42 @@ impl PtyManager {
     }
 
     pub fn write(&self, id: u32, generation: u32, data: &str) -> Result<(), String> {
+        self.write_input(id, generation, data, false)
+    }
+
+    pub fn write_input(&self, id: u32, generation: u32, data: &str, protocol_reply: bool) -> Result<(), String> {
         let pty = self.get(id, generation)?;
-        let mut writer = pty.writer.lock().unwrap();
-        writer.write_all(data.as_bytes()).map_err(|error| {
+        let mut input = pty.input.lock().unwrap();
+        if !protocol_reply {
+            pty.input_revision.fetch_add(1, Ordering::Relaxed);
+            input.agent.invalidate_input();
+        }
+        input.writer.write_all(data.as_bytes()).map_err(|error| {
             diagnostics::record(&format!(
                 "write failed tab={id} generation={generation}: {error}"
             ));
             error.to_string()
         })
+    }
+
+    pub fn report_agent_event(&self, id: u32, generation: u32, agent: &str, event: AgentEvent, paste: bool, observed: Option<u64>) -> bool {
+        let Ok(pty) = self.get(id, generation) else { return false };
+        let mut input = pty.input.lock().unwrap();
+        let revision = pty.input_revision.load(Ordering::Relaxed);
+        input.agent.report(agent, event, paste, observed, revision)
+    }
+
+    pub fn submit_agent_text(&self, id: u32, generation: u32, text: &str) -> Result<(), String> {
+        let pty = self.get(id, generation).map_err(|_| "原会话已失效")?;
+        let mut input = pty.input.lock().unwrap();
+        let revision = pty.input_revision.load(Ordering::Relaxed);
+        let data = input.agent.take_input(revision, text)?;
+        pty.input_revision.fetch_add(1, Ordering::Relaxed);
+        if write_agent_input(input.writer.as_mut(), data).is_err() {
+            input.agent.reject_input();
+            return Err("终端写入失败，请打开远程终端确认输入".into());
+        }
+        Ok(())
     }
 
     pub fn resize(&self, id: u32, generation: u32, cols: u16, rows: u16) -> Result<(), String> {
@@ -255,6 +296,18 @@ impl PtyManager {
     }
 }
 
+// 调用期间持有输入锁，正文与最后的提交回车之间不会混入其他输入。
+fn write_agent_input(writer: &mut dyn Write, mut input: AgentInput) -> std::io::Result<()> {
+    if input.submit_delay.is_zero() {
+        input.data.push('\r');
+        return writer.write_all(input.data.as_bytes());
+    }
+    writer.write_all(input.data.as_bytes())?;
+    writer.flush()?;
+    std::thread::sleep(input.submit_delay);
+    writer.write_all(b"\r")
+}
+
 // ---------- shell 探测 ----------
 
 pub fn detect_shells() -> Vec<ShellInfo> {
@@ -313,4 +366,73 @@ fn find_pwsh() -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    #[derive(Default)]
+    struct RecordingWriter {
+        writes: Vec<(Instant, Vec<u8>)>,
+        fail_write: bool,
+        fail_flush: bool,
+        flushes: usize,
+    }
+
+    impl Write for RecordingWriter {
+        fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+            if self.fail_write { return Err(std::io::Error::other("write failed")); }
+            self.writes.push((Instant::now(), data.to_vec()));
+            Ok(data.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.flushes += 1;
+            if self.fail_flush { Err(std::io::Error::other("flush failed")) } else { Ok(()) }
+        }
+    }
+
+    fn completed_input(agent: &str) -> AgentInput {
+        let mut turn = AgentTurn::default();
+        turn.report(agent, AgentEvent::Prompt, true, None, 0);
+        assert!(turn.report(agent, AgentEvent::Complete, true, Some(0), 0));
+        turn.take_input(0, "第一段\n\n第三段").unwrap()
+    }
+
+    #[test]
+    fn codex_writes_all_paragraphs_before_one_delayed_submit() {
+        let mut writer = RecordingWriter::default();
+        let input = completed_input("codex");
+        let delay = input.submit_delay;
+        write_agent_input(&mut writer, input).unwrap();
+        assert_eq!(writer.writes.len(), 2);
+        assert_eq!(writer.writes[0].1, "\x1b[200~第一段\x1b[201~\x1b\r\x1b[200~\x1b[201~\x1b\r\x1b[200~第三段\x1b[201~".as_bytes());
+        assert_eq!(writer.writes[1].1, b"\r");
+        assert!(writer.writes[1].0.duration_since(writer.writes[0].0) >= delay);
+        assert_eq!(writer.flushes, 1);
+
+        for agent in ["claude", "pi"] {
+            let mut writer = RecordingWriter::default();
+            write_agent_input(&mut writer, completed_input(agent)).unwrap();
+            assert_eq!(writer.writes.len(), 1);
+            assert_eq!(writer.writes[0].1, "\x1b[200~第一段\r\r第三段\x1b[201~\r".as_bytes());
+            assert_eq!(writer.flushes, 0);
+        }
+    }
+
+    #[test]
+    fn failed_paste_does_not_send_the_submit_key() {
+        let mut writer = RecordingWriter { fail_write: true, ..RecordingWriter::default() };
+        assert!(write_agent_input(&mut writer, completed_input("codex")).is_err());
+        assert!(writer.writes.is_empty());
+        assert_eq!(writer.flushes, 0);
+
+        let mut writer = RecordingWriter { fail_flush: true, ..RecordingWriter::default() };
+        assert!(write_agent_input(&mut writer, completed_input("codex")).is_err());
+        assert_eq!(writer.writes.len(), 1);
+        assert_eq!(writer.flushes, 1);
+        assert!(!writer.writes[0].1.ends_with(b"\r"));
+    }
 }

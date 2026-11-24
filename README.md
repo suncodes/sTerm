@@ -16,6 +16,7 @@ sTerm 是一个面向 Windows 的轻量级本地终端，针对 Claude Code、Co
 | 高效操作 | 搜索、复制粘贴、字号调整、侧栏折叠、快捷键和右键菜单 |
 | 可选悬浮窗 | 在主窗口最小化后展示当前 Agent 会话状态；拖至屏幕边缘可收起为状态点条，空状态显示中性把手 |
 | 可选远程访问 | 手机或浏览器扫码查看与接管已分享终端；支持局域网、Cloudflare Tunnel 和 ngrok，公网组件按需下载 |
+| 可选飞书通知 | 任务完成时向飞书群发送通知，可在对应话题续问或打开原会话 |
 
 ## 系统要求
 
@@ -63,6 +64,8 @@ npm run tauri build
 安装包输出位于 src-tauri/target/release/bundle/nsis/，便携包输出位于 src-tauri/target/release/。
 
 远程入口为「设置 → 远程访问」，支持统一默认权限与会话例外；手机通过右侧列表切换会话。已有安装版正在使用时，可运行 `npm run dev:remote` 启动隔离配置的开发版。扫码及公网配置见 [远程访问说明](docs/remote-access.md)。
+
+飞书入口为「设置 → 通知」，配置步骤见 [飞书完成通知与续问](docs/feishu-notifications.md)。
 
 ## 发布新版本
 

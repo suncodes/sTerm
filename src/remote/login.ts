@@ -4,6 +4,20 @@ export interface AuthStatus {
   passwordAllowed: boolean;
 }
 
+export async function pairRemoteBrowser(token: string, notification: boolean): Promise<void> {
+  const response = await fetch("/api/auth", { credentials: "same-origin", cache: "no-store" });
+  if (!response.ok) throw new Error("无法检查访问授权，请稍后重试。");
+  const status: AuthStatus = await response.json();
+  if (status.authenticated || (notification && status.passwordEnabled)) return;
+  const paired = await fetch("/api/pair", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }), credentials: "same-origin",
+  });
+  if (!paired.ok) throw new Error(notification
+    ? "临时配对链接已失效或已使用。请在对应飞书话题中 @ 机器人发送「打开会话」获取新链接。"
+    : "配对二维码已失效或已使用，请在电脑端重新生成，或输入访问码。");
+}
+
 export class RemoteLogin {
   private readonly form: HTMLFormElement;
   private readonly password: HTMLInputElement;
@@ -59,7 +73,7 @@ export class RemoteLogin {
       this.form.hidden = !status.passwordEnabled || !status.passwordAllowed;
       this.retry.hidden = false;
       this.message.textContent = message || (!status.passwordEnabled
-        ? "请在电脑端扫码配对，或启用访问码登录。"
+        ? "请在电脑端扫码配对，或启用访问码登录。飞书通知链接失效时，可在对应话题中 @ 机器人发送「打开会话」。"
         : !status.passwordAllowed ? "访问码登录需使用 HTTPS 公网地址；当前地址请扫码配对。"
         : "输入电脑端设置的 6 位数字访问码。");
       this.updateCooldown();

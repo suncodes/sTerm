@@ -35,7 +35,15 @@ export class AgentState {
     switch (event) {
       case "start":
       case "stop":
+      case "ready":
+      case "complete":
+      case "error":
         this.set("idle", name);
+        break;
+      case "blocked":
+        if (name !== "pi") this.set("idle", name);
+        break;
+      case "unblocked":
         break;
       case "prompt":
         this.set("running", name);

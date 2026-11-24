@@ -4,7 +4,7 @@ Claude Code 和 Codex 统一使用原生 OSC 7501。它们不再需要 sTerm 状
 
 - Claude Code 要求 2.1.295 或更新版本；sTerm 会响应其协议能力探测。不要设置 CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1，这会禁用 Claude 的状态探测与报告。
 - Codex 需要支持 OSC 7501；已用 0.166.0 的默认共享后台模式验证。
-- Pi 继续使用官方扩展机制：Windows 本地写事件信箱，WSL / SSH 内的扩展发送 OSC 777。
+- Pi 通过扩展发送 OSC 777，Windows 无控制终端时使用本地事件信箱。飞书完成通知需要 Pi 支持 agent_settled，并在「设置 → 集成」更新扩展后重启 Pi。
 
 ## 从旧版升级
 

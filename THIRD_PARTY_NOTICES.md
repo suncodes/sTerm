@@ -13,8 +13,12 @@ sTerm source code is licensed under Apache License 2.0. Third-party components r
 | xterm.js and its fit, search, web-links, serialize addons | 5.5.0 / lockfile-pinned | MIT |
 | qrcode | 1.5.4 | MIT |
 | axum / tokio / if-addrs | lockfile-pinned | MIT |
+| prost / prost-derive | 0.14.x | Apache-2.0 |
+| tokio-tungstenite / tungstenite | 0.29.x | MIT |
 | reqwest / sha2 | lockfile-pinned | Apache-2.0 or MIT |
 | zip | lockfile-pinned | MIT |
+
+Feishu long connections reuse tokio-tungstenite with TLS and use prost for the Protobuf frames described by the [Feishu Go SDK](https://github.com/larksuite/oapi-sdk-go/tree/v3_main/ws). Both build into the existing executable and require no separate runtime.
 
 The complete resolved dependency graph is recorded in src-tauri/Cargo.lock and package-lock.json. Those lockfiles are the version authority for a release.
 

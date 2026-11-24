@@ -4,6 +4,20 @@ All notable changes to sTerm are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-11-24
+
+### Added
+
+- Add optional Feishu completion notifications for terminal sessions, topic-bound plain-text follow-up, encrypted credentials, and links back to shared remote sessions.
+- Add explicit completion events across native Agent protocols and Pi agent_settled integration.
+
+### Fixed
+
+- Persist the Feishu enable switch when configuration is incomplete or the settings page changes; support optional user lists and explicit access for all group members.
+- Keep terminal focus reports and device-query replies from invalidating follow-up input, while preserving remote control and concurrent input protection.
+- Use one-time pairing links when no remote access code is configured, prioritize existing browser authorization or access-code login, and allow authorized users to refresh links from the original topic.
+- Submit complete multiline Codex prompts on Windows without sending only the first paragraph or leaving the remaining text in the input box.
+
 ## [0.2.5] - 2026-11-19
 
 ### Added

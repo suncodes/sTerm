@@ -23,6 +23,7 @@ const PAIR_LIFETIME: Duration = Duration::from_secs(300);
 const CLIENT_LIFETIME: Duration = Duration::from_secs(12 * 60 * 60);
 const PASSWORD_CLIENT_LIFETIME: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const MAX_CLIENTS: usize = 8;
+const MAX_PAIR_TICKETS: usize = 128;
 const MAX_SNAPSHOT: usize = 2 * 1024 * 1024;
 
 pub trait RemoteHost: Send + Sync {
@@ -64,6 +65,8 @@ impl RemoteHost for DesktopHost {
 pub struct SharedSession {
     pub id: u32,
     pub generation: u32,
+    #[serde(default)]
+    pub link_key: Option<String>,
     pub title: String,
     pub cols: u16,
     pub rows: u16,
@@ -85,6 +88,7 @@ pub struct SharedSession {
 struct PairTicket {
     origin: String,
     expires: Instant,
+    session: Option<String>,
 }
 
 struct Client {
@@ -103,6 +107,17 @@ struct Inner {
     password: Option<PasswordVerifier>,
     auth_generation: u64,
     login_limiter: LoginLimiter,
+}
+
+impl Inner {
+    fn issue_pair(&mut self, origin: &str, session: Option<String>) -> Result<String, String> {
+        if !self.origins.iter().any(|allowed| allowed == origin) { return Err("请选择已连接的访问地址".into()); }
+        self.pairs.retain(|_, ticket| ticket.expires > Instant::now());
+        if self.pairs.len() >= MAX_PAIR_TICKETS { return Err("临时配对链接数量已达上限，请稍后重试".into()); }
+        let token = secret();
+        self.pairs.insert(token.clone(), PairTicket { origin: origin.into(), expires: Instant::now() + PAIR_LIFETIME, session });
+        Ok(format!("{origin}/#pair={token}"))
+    }
 }
 
 pub struct RemoteHub {
@@ -162,8 +177,10 @@ impl RemoteHub {
         let mut inner = self.inner.lock().unwrap();
         session.controller = None;
         session.epoch = None;
+        session.link_key = Some(uuid::Uuid::new_v4().to_string());
         if let Some(previous) = inner.sessions.get(&session.id).filter(|old| old.generation == session.generation) {
             session.seq = previous.seq;
+            session.link_key.clone_from(&previous.link_key);
             if session.allow_control {
                 session.controller = previous.controller.clone();
                 session.epoch = previous.epoch.clone();
@@ -211,12 +228,7 @@ impl RemoteHub {
 
     fn issue_pair(&self, origin: &str) -> Result<Value, String> {
         let mut inner = self.inner.lock().unwrap();
-        if !inner.origins.iter().any(|allowed| allowed == origin) { return Err("请选择已连接的访问地址".into()); }
-        inner.pairs.retain(|_, ticket| ticket.expires > Instant::now());
-        if inner.pairs.len() >= 16 { inner.pairs.clear(); }
-        let token = secret();
-        inner.pairs.insert(token.clone(), PairTicket { origin: origin.into(), expires: Instant::now() + PAIR_LIFETIME });
-        Ok(json!({"url": format!("{origin}/#pair={token}"), "expiresIn": PAIR_LIFETIME.as_secs()}))
+        Ok(json!({"url": inner.issue_pair(origin, None)?, "expiresIn": PAIR_LIFETIME.as_secs()}))
     }
 
     fn pair(&self, token: &str, origin: &str, ip: IpAddr) -> Result<String, StatusCode> {
@@ -230,6 +242,11 @@ impl RemoteHub {
         if inner.clients.len() >= MAX_CLIENTS { return Err(StatusCode::TOO_MANY_REQUESTS); }
         let ticket = inner.pairs.get(token).ok_or(StatusCode::UNAUTHORIZED)?;
         if ticket.expires <= Instant::now() || ticket.origin != origin { return Err(StatusCode::UNAUTHORIZED); }
+        if let Some(key) = ticket.session.as_ref() {
+            if inner.password.is_some() || !inner.sessions.values().any(|session| session.link_key.as_ref() == Some(key)) {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+        }
         inner.pairs.remove(token);
         let cookie = secret();
         inner.clients.insert(cookie.clone(), Client { id: uuid::Uuid::new_v4().to_string(), expires: Instant::now() + CLIENT_LIFETIME });
@@ -309,6 +326,24 @@ impl RemoteHub {
         }
         drop(inner);
         self.host.write(id, generation, data)
+    }
+
+    pub(crate) fn with_unclaimed_input(&self, id: u32, generation: u32, write: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+        let _input = self.input.lock().unwrap();
+        if !self.local_write_allowed(id, generation) {
+            return Err("手机正在控制此会话，请先在远程面板收回控制权".into());
+        }
+        write()
+    }
+
+    pub(crate) fn shared_link(&self, id: u32, generation: u32) -> Option<String> {
+        let mut inner = self.inner.lock().unwrap();
+        if self.stopped.load(Ordering::Relaxed) { return None; }
+        let key = inner.sessions.get(&id).filter(|session| session.generation == generation)?.link_key.clone()?;
+        let origin = inner.origins.iter().find(|origin| origin.starts_with("https://"))?.clone();
+        if inner.password.is_some() { return Some(format!("{origin}/#session={key}")); }
+        let url = inner.issue_pair(&origin, Some(key.clone())).ok()?;
+        Some(format!("{url}&session={key}"))
     }
 
     pub fn local_write_allowed(&self, id: u32, generation: u32) -> bool {
@@ -809,7 +844,7 @@ mod tests {
         assert!(password_remaining > Duration::from_secs(29 * 24 * 60 * 60));
         assert!(qr_remaining <= CLIENT_LIFETIME);
         assert!(qr_remaining > CLIENT_LIFETIME - Duration::from_secs(10));
-        hub.share(SharedSession { id: 1, generation: 1, title: "readonly".into(), cols: 80, rows: 24,
+        hub.share(SharedSession { id: 1, generation: 1, link_key: None, title: "readonly".into(), cols: 80, rows: 24,
             allow_control: false, controller: None, epoch: None, seq: 0, cwd: None, agent: None, agent_status: None }).unwrap();
         assert!(hub.claim(&client, 1, 1).is_err());
         let mut headers = HeaderMap::new();
@@ -933,7 +968,7 @@ mod tests {
     #[test]
     fn leases_reject_viewers_stale_packets_and_old_generations() {
         let (hub, host) = fixture();
-        let mut session = SharedSession { id: 1, generation: 2, title: "test".into(), cols: 80, rows: 24, allow_control: false, controller: None, epoch: None, seq: 0, cwd: None, agent: None, agent_status: None };
+        let mut session = SharedSession { id: 1, generation: 2, link_key: None, title: "test".into(), cols: 80, rows: 24, allow_control: false, controller: None, epoch: None, seq: 0, cwd: None, agent: None, agent_status: None };
         hub.share(session.clone()).unwrap();
         assert!(hub.claim("phone", 1, 2).is_err());
         session.allow_control = true;
@@ -944,10 +979,74 @@ mod tests {
         assert!(hub.remote_write("phone", 1, 1, &epoch, "bad").is_err());
         hub.remote_write("phone", 1, 2, &epoch, "ok").unwrap();
         assert!(!hub.local_write_allowed(1, 2));
+        assert!(hub.with_unclaimed_input(1, 2, || panic!("已被手机接管")).is_err());
         hub.reclaim(1, None);
         assert!(hub.local_write_allowed(1, 2));
         assert!(hub.remote_write("phone", 1, 2, &epoch, "bad").is_err());
         assert_eq!(*host.input.lock().unwrap(), vec!["ok"]);
+    }
+
+    #[test]
+    fn notification_links_pair_without_a_password_and_follow_the_shared_generation() {
+        let (hub, _) = fixture();
+        let mut session = SharedSession {
+            id: 7, generation: 1, link_key: None, title: "session".into(), cols: 80, rows: 24,
+            allow_control: false, controller: None, epoch: None, seq: 0, cwd: None, agent: None, agent_status: None,
+        };
+        hub.share(session.clone()).unwrap();
+        assert!(hub.shared_link(7, 1).is_none());
+        hub.set_public_origin(Some("https://terminal.example".into()));
+        let url = hub.shared_link(7, 1).unwrap();
+        assert!(url.starts_with("https://terminal.example/#pair="));
+        let key = hub.status().sessions[0].link_key.clone().unwrap();
+        assert!(url.ends_with(&format!("&session={key}")));
+        assert_eq!(hub.inner.lock().unwrap().clients.len(), 2);
+        let token = url.split("#pair=").nth(1).unwrap().split('&').next().unwrap();
+        let ip = "127.0.0.1".parse().unwrap();
+        assert!(hub.pair(token, "https://terminal.example", ip).is_ok());
+        assert!(hub.pair(token, "https://terminal.example", ip).is_err());
+        session.title = "renamed".into();
+        hub.share(session.clone()).unwrap();
+        assert!(hub.shared_link(7, 1).unwrap().ends_with(&format!("&session={key}")));
+        let pending = hub.shared_link(7, 1).unwrap();
+        session.generation = 2;
+        hub.share(session).unwrap();
+        assert!(hub.shared_link(7, 1).is_none());
+        let token = pending.split("#pair=").nth(1).unwrap().split('&').next().unwrap();
+        assert!(hub.pair(token, "https://terminal.example", ip).is_err());
+        assert_ne!(hub.shared_link(7, 2), Some(url));
+        hub.unshare(7, 2);
+        assert!(hub.shared_link(7, 2).is_none());
+    }
+
+    #[test]
+    fn notification_pairing_can_be_refreshed_and_password_mode_uses_login_links() {
+        let (hub, _) = fixture();
+        let session = SharedSession {
+            id: 7, generation: 1, link_key: None, title: "session".into(), cols: 80, rows: 24,
+            allow_control: false, controller: None, epoch: None, seq: 0, cwd: None, agent: None, agent_status: None,
+        };
+        hub.share(session.clone()).unwrap();
+        let origin = "https://terminal.example";
+        let ip = "127.0.0.1".parse().unwrap();
+        hub.set_public_origin(Some(origin.into()));
+        let expired = hub.shared_link(7, 1).unwrap();
+        let token = expired.split("#pair=").nth(1).unwrap().split('&').next().unwrap();
+        hub.inner.lock().unwrap().pairs.get_mut(token).unwrap().expires = Instant::now() - Duration::from_secs(1);
+        assert!(hub.pair(token, origin, ip).is_err());
+        let fresh = hub.shared_link(7, 1).unwrap();
+        let token = fresh.split("#pair=").nth(1).unwrap().split('&').next().unwrap();
+        assert!(hub.pair(token, origin, ip).is_ok());
+        let old = hub.shared_link(7, 1).unwrap();
+        hub.unshare(7, 1);
+        hub.share(session).unwrap();
+        let token = old.split("#pair=").nth(1).unwrap().split('&').next().unwrap();
+        assert!(hub.pair(token, origin, ip).is_err());
+        hub.set_password(Some(PasswordVerifier::new("123456").unwrap()));
+        let url = hub.shared_link(7, 1).unwrap();
+        assert!(url.starts_with("https://terminal.example/#session="));
+        assert_eq!(hub.shared_link(7, 1), Some(url));
+        assert!(hub.inner.lock().unwrap().pairs.is_empty());
     }
 
     #[test]
@@ -968,7 +1067,7 @@ mod tests {
     #[test]
     fn downgrading_or_unsharing_immediately_invalidates_control() {
         let (hub, host) = fixture();
-        let mut session = SharedSession { id: 1, generation: 2, title: "test".into(), cols: 80, rows: 24,
+        let mut session = SharedSession { id: 1, generation: 2, link_key: None, title: "test".into(), cols: 80, rows: 24,
             allow_control: true, controller: None, epoch: None, seq: 0, cwd: None, agent: None, agent_status: None };
         hub.share(session.clone()).unwrap();
         hub.claim("phone", 1, 2).unwrap();
@@ -993,7 +1092,7 @@ mod tests {
     #[test]
     fn revoking_devices_rejects_auth_and_queued_claims_but_keeps_sessions() {
         let (hub, host) = fixture();
-        hub.share(SharedSession { id: 1, generation: 2, title: "existing shell".into(), cols: 80, rows: 24,
+        hub.share(SharedSession { id: 1, generation: 2, link_key: None, title: "existing shell".into(), cols: 80, rows: 24,
             allow_control: true, controller: None, epoch: None, seq: 0, cwd: None, agent: None, agent_status: None }).unwrap();
         let origin = "http://127.0.0.1:8123";
         let pair = hub.issue_pair(origin).unwrap();
@@ -1039,7 +1138,7 @@ mod tests {
         use futures_util::{SinkExt, StreamExt};
         use tokio_tungstenite::{connect_async, tungstenite::{client::IntoClientRequest, Message as WsMessage}};
         let (hub, host) = fixture();
-        hub.share(SharedSession { id: 7, generation: 3, title: "existing shell".into(), cols: 80, rows: 24,
+        hub.share(SharedSession { id: 7, generation: 3, link_key: None, title: "existing shell".into(), cols: 80, rows: 24,
             allow_control: true, controller: None, epoch: None, seq: 0, cwd: None, agent: None, agent_status: None }).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();

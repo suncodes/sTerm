@@ -1,14 +1,31 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createRequire } from "node:module";
 import { build } from "esbuild";
 
 const bundle = await build({
-  stdin: { contents: 'export * from "./src/terminal/agentevents"; export * from "./src/terminal/agentstate";', resolveDir: process.cwd() },
+  stdin: { contents: 'export * from "./src/terminal/agentevents"; export * from "./src/terminal/agentstate"; export * from "./src/terminal/input";', resolveDir: process.cwd() },
   bundle: true, write: false, format: "esm", platform: "node",
 });
-const { AgentOscChannel, parseAgentOsc, parseAgentKind, parseProgramStatus, AgentState } = await import(
+const { AgentOscChannel, parseAgentOsc, parseAgentKind, parseProgramStatus, AgentState, onTerminalData } = await import(
   "data:text/javascript;base64," + Buffer.from(bundle.outputFiles[0].contents).toString("base64")
 );
+
+test("terminal focus and device replies preserve input availability while real input is tracked", async () => {
+  const { Terminal } = createRequire(import.meta.url)("@xterm/headless");
+  const terminal = new Terminal({ cols: 80, rows: 24 });
+  const data = [];
+  const subscription = onTerminalData(terminal, (text, userInput) => data.push([text, userInput]));
+  assert.equal(typeof terminal._core.coreService.onUserInput, "function");
+  terminal._core.coreService.triggerDataEvent("\x1b[I");
+  terminal._core.coreService.triggerDataEvent("\x1b[O");
+  await new Promise(resolve => terminal.write("\x1b[6n", resolve));
+  terminal.input("中文提示词");
+  terminal.input("\x1b[1;5R");
+  assert.deepEqual(data, [["\x1b[I", false], ["\x1b[O", false], ["\x1b[1;1R", false], ["中文提示词", true], ["\x1b[1;5R", true]]);
+  subscription.dispose();
+  terminal.dispose();
+});
 
 globalThis.window = { setInterval: () => 1, clearInterval: () => {} };
 const frame = (agent, event, session = "session-1") => "sterm;v=1;agent=" + agent + ";event=" + event + ";session=" + session;
@@ -170,4 +187,18 @@ test("switching native agents at the same status refreshes the identity", () => 
   channel.acceptProgramStatus(native("claude", "idle"));
   assert.deepEqual(changes, [["codex", "idle"], ["claude", "idle"]]);
   state.dispose();
+});
+
+test("notifications can distinguish working, completion, waiting and a legacy Pi stop", () => {
+  const delivered = [];
+  const channel = new AgentOscChannel(event => delivered.push(event.event));
+  for (const state of ["idle", "working", "blocked", "done", "error", "clear"]) {
+    channel.acceptProgramStatus(state === "clear" ? "state=clear" : native("codex", state));
+  }
+  assert.deepEqual(delivered, ["ready", "prompt", "blocked", "complete", "error", "end"]);
+  delivered.length = 0;
+  for (const event of ["start", "prompt", "blocked", "unblocked", "stop", "complete", "end"]) {
+    channel.accept(frame("pi", event));
+  }
+  assert.deepEqual(delivered, ["start", "prompt", "blocked", "unblocked", "stop", "complete", "end"]);
 });

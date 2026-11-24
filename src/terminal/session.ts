@@ -1,4 +1,4 @@
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { SerializeAddon } from "@xterm/addon-serialize";
@@ -7,8 +7,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { LineTracker, extractAgent } from "./detect";
 import { AgentState } from "./agentstate";
-import { AgentOscChannel, parseAgentKind, PROGRAM_STATUS_RESPONSE } from "./agentevents";
+import { AgentOscChannel, parseAgentKind, PROGRAM_STATUS_RESPONSE, type AgentEvent } from "./agentevents";
 import { MouseModeFilter } from "./mousefilter";
+import { onTerminalData } from "./input";
 import { changeDirectoryCommand } from "./commands";
 import { cwdFromFileUri } from "../util";
 import { showToast } from "../ui/toast";
@@ -38,6 +39,7 @@ export interface SessionOptions {
   onAgent: (session: TerminalSession, agent: AgentName) => void;
   /** Agent 状态变化（running/idle/exited），用于标签状态点 */
   onAgentStatus?: (session: TerminalSession) => void;
+  onAgentEvent?: (session: TerminalSession, event: AgentEvent, inputRevision?: number) => void;
   onSidebarToggle?: () => void;
   onNewTab?: () => void;
   onCloseTab?: () => void;
@@ -72,13 +74,16 @@ export class TerminalSession {
   private termEl: HTMLElement;
   private overlay: HTMLElement;
   private fitAddon = new FitAddon();
+  private inputListener: IDisposable;
   private tracker = new LineTracker();
   private opts: SessionOptions;
-  private outQueue: Uint8Array[] = [];
+  private outQueue: { data: Uint8Array; inputRevision?: number }[] = [];
   private mouseModeFilter = new MouseModeFilter();
   private outputGeneration = 0;
+  private outputInputRevision: number | undefined;
+  private queuedInputRevision: number | undefined;
   private queuedOutputGeneration = 0;
-  private agentOsc = new AgentOscChannel(({ agent, event }) => this.agentState.markAgentEvent(agent, event));
+  private agentOsc = new AgentOscChannel(event => this.applyAgentEvent(event, this.outputInputRevision));
   private flushTimer: number | null = null;
   private alive = false;
   private remoteShared = false;
@@ -181,11 +186,12 @@ export class TerminalSession {
     this.term.attachCustomKeyEventHandler((ev) => this.handleKey(ev));
 
     // 输入：先喂给检测器，再原样转发给 PTY
-    this.term.onData((data) => {
-      if (this.remoteControlled) {
+    this.inputListener = onTerminalData(this.term, (data, userInput) => {
+      if (!userInput) {
         void invoke("pty_write", { id: this.id, generation: this.generation, data, protocolReply: true }).catch(() => {});
         return;
       }
+      if (this.remoteControlled) return;
       const line = this.tracker.feed(data);
       if (line !== null) {
         const agent = extractAgent(line);
@@ -260,6 +266,7 @@ export class TerminalSession {
     this.ptySentCols = 0;
     this.ptySentRows = 0;
     this.outQueue = [];
+    this.queuedInputRevision = undefined;
     this.mouseModeFilter.reset();
     this.overlay.classList.add("hidden");
     try {
@@ -348,8 +355,8 @@ export class TerminalSession {
 
   /* ---------- TabManager 分发的事件 ---------- */
 
-  handleOutput(generation: number, u: Uint8Array): void {
-    if (!this.disposed && generation === this.generation) this.enqueue(u);
+  handleOutput(generation: number, u: Uint8Array, inputRevision?: number): void {
+    if (!this.disposed && generation === this.generation) this.enqueue(u, inputRevision);
   }
 
   /** 事件信箱分发来的 Pi 扩展事件。 */
@@ -357,12 +364,19 @@ export class TerminalSession {
     if (this.disposed || generation !== this.generation || this.exitedGeneration === generation
       || this.agentOsc.hasControl) return;
     const event = parseAgentKind(kind);
-    if (event) this.agentState.markAgentEvent(event.agent, event.event);
+    if (event) this.applyAgentEvent(event);
+  }
+
+  private applyAgentEvent(event: AgentEvent, inputRevision?: number): void {
+    this.agentState.markAgentEvent(event.agent, event.event);
+    this.opts.onAgentEvent?.(this, event, inputRevision);
   }
 
   handleExit(generation: number): void {
     if (this.disposed || generation !== this.generation) return;
     this.exitedGeneration = generation;
+    const agent = this.agentState.agent;
+    if (agent) this.opts.onAgentEvent?.(this, { agent, event: "end" });
     this.agentState.markExited();
     this.alive = false;
     this.cancelResize();
@@ -381,6 +395,8 @@ export class TerminalSession {
   private handleOscCwd(data: string): boolean {
     if (!this.acceptsOutput()) return true;
     if (!data.startsWith("file://")) return false;
+    const agent = this.agentState.agent;
+    if (agent) this.opts.onAgentEvent?.(this, { agent, event: "end" });
     this.agentOsc.shellPrompt();
     this.agentState.markShellPrompt();
     const path = cwdFromFileUri(data);
@@ -408,8 +424,8 @@ export class TerminalSession {
 
   /* ---------- 输出合并：把高频数据攒成 8ms 一批 ---------- */
 
-  private enqueue(u: Uint8Array): void {
-    this.outQueue.push(u);
+  private enqueue(data: Uint8Array, inputRevision?: number): void {
+    this.outQueue.push({ data, inputRevision });
     // 最小化时不叠加输出合并定时器，状态序列及时进入 xterm 的解析队列。
     if (document.visibilityState === "hidden") {
       if (this.flushTimer !== null) window.clearTimeout(this.flushTimer);
@@ -426,16 +442,17 @@ export class TerminalSession {
     const q = this.outQueue;
     this.outQueue = [];
     if (q.length === 0) return;
-    let total = 0;
-    for (const x of q) total += x.length;
-    const out = new Uint8Array(total);
-    let o = 0;
-    for (const x of q) {
-      out.set(x, o);
-      o += x.length;
+    let text = "";
+    let revision = q[0].inputRevision;
+    for (const output of q) {
+      if (output.inputRevision !== revision) {
+        if (text) this.writeOutput(text, revision);
+        text = "";
+        revision = output.inputRevision;
+      }
+      text += this.mouseModeFilter.filter(output.data);
     }
-    const text = this.mouseModeFilter.filter(out);
-    if (text) this.writeOutput(text);
+    if (text) this.writeOutput(text, revision);
   }
 
   private acceptsOutput(): boolean {
@@ -443,12 +460,16 @@ export class TerminalSession {
       && this.exitedGeneration !== this.generation;
   }
 
-  private writeOutput(text: string): void {
+  private writeOutput(text: string, inputRevision?: number): void {
     const generation = this.generation;
     if (this.queuedOutputGeneration !== generation) {
       this.queuedOutputGeneration = generation;
       // CAN 结束上一代未完成的控制序列；标记与输出在 xterm 队列中保持顺序。
-      this.term.write("\x18", () => { this.outputGeneration = generation; this.pendingSequence.reset(); });
+      this.term.write("\x18", () => { this.outputGeneration = generation; this.outputInputRevision = undefined; this.pendingSequence.reset(); });
+    }
+    if (this.queuedInputRevision !== inputRevision) {
+      this.queuedInputRevision = inputRevision;
+      this.term.write("", () => { this.outputInputRevision = inputRevision; });
     }
     for (let index = 0; index < text.length;) {
       let end = Math.min(index + 32768, text.length);
@@ -462,6 +483,15 @@ export class TerminalSession {
       });
       index = end;
     }
+  }
+
+  /** 先解析已到达的输出，避免在终端切换界面时提交飞书消息。 */
+  async allowsAgentInput(generation: number): Promise<boolean> {
+    if (!this.isRunning || generation !== this.generation) return false;
+    if (this.flushTimer !== null) { window.clearTimeout(this.flushTimer); this.flushTimer = null; }
+    this.flush();
+    await new Promise<void>(resolve => this.term.write("", resolve));
+    return this.isRunning && generation === this.generation && Boolean(this.agentState.agent);
   }
 
   remoteInfo(): SharedSession {
@@ -832,6 +862,7 @@ export class TerminalSession {
       this.flushTimer = null;
     }
     void invoke("pty_kill", { id: this.id, generation: this.generation }).catch(() => {});
+    this.inputListener.dispose();
     this.term.dispose();
     this.pane.remove();
   }

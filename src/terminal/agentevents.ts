@@ -1,6 +1,6 @@
 import type { AgentName } from "../types";
 
-export type AgentEventKind = "start" | "prompt" | "stop" | "end";
+export type AgentEventKind = "start" | "prompt" | "stop" | "ready" | "complete" | "blocked" | "unblocked" | "error" | "end";
 
 export interface AgentEvent {
   agent: AgentName;
@@ -19,8 +19,11 @@ interface ProgramStatus {
   id: string | null;
 }
 
-const EVENTS = new Set(["start", "prompt", "stop", "end"]);
+const EVENTS = new Set(["start", "prompt", "stop", "complete", "blocked", "unblocked", "error", "end"]);
 const PROGRAM_STATES = new Set(["idle", "working", "done", "blocked", "error", "clear"]);
+const PROGRAM_EVENTS: Record<ProgramState, AgentEventKind> = {
+  idle: "ready", working: "prompt", done: "complete", blocked: "blocked", error: "error", clear: "end",
+};
 // 最小能力响应；Claude 收到响应后才会发送 OSC 7501 状态。
 export const PROGRAM_STATUS_RESPONSE = "\x1b]7501;?\x1b\\";
 
@@ -124,7 +127,7 @@ export class AgentOscChannel {
     }
     this.deliver({
       agent,
-      event: report.state === "clear" ? "end" : report.state === "working" ? "prompt" : "stop",
+      event: PROGRAM_EVENTS[report.state],
       session: "terminal",
     });
     return true;

@@ -3,6 +3,7 @@ import type { AgentStatus } from "../terminal/agentstate";
 export interface SharedSession {
   id: number;
   generation: number;
+  linkKey?: string | null;
   title: string;
   cols: number;
   rows: number;
@@ -79,4 +80,10 @@ export function terminalKey(key: string, applicationCursorKeys = false, modifier
   if (key === "enter") return modifiers.alt ? `\x1b${value}` : value;
   if (key === "escape") return modifiers.alt ? `\x1b${value}` : value;
   return value;
+}
+
+/** 通知链接只携带会话定位键，授权仍由远程服务验证。 */
+export function notificationSessionKey(hash: string): string | null {
+  const target = new URLSearchParams(hash.slice(1)).get("session");
+  return target && /^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(target) ? target.toLowerCase() : null;
 }

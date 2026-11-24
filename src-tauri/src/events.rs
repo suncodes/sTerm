@@ -88,7 +88,7 @@ impl Mailbox {
             if !line.ends_with('\n') { break; }
             let kind = line.trim();
             if let Some((agent, event)) = kind.split_once('-') {
-                if matches!(agent, "claude" | "codex" | "pi") && matches!(event, "start" | "prompt" | "stop" | "end") {
+                if matches!(agent, "claude" | "codex" | "pi") && matches!(event, "start" | "prompt" | "stop" | "complete" | "blocked" | "unblocked" | "error" | "end") {
                     emit(AgentEvent { tab_id: self.tab_id, generation: self.generation, kind: kind.to_string() })?;
                 }
             }

@@ -7,10 +7,10 @@ const require = createRequire(import.meta.url);
 const { Terminal } = require("@xterm/headless");
 const { SerializeAddon } = require("@xterm/addon-serialize");
 const bundle = await build({
-  stdin: { contents: 'export * from "./src/remote/types"; export * from "./src/remote/pending"; export * from "./src/remote/mirror"; export * from "./src/remote/permissions"; export * from "./src/remote/history"; export * from "./src/remote/keyrepeat";', resolveDir: process.cwd() },
+  stdin: { contents: 'export * from "./src/remote/types"; export * from "./src/remote/pending"; export * from "./src/remote/mirror"; export * from "./src/remote/permissions"; export * from "./src/remote/history"; export * from "./src/remote/keyrepeat"; export * from "./src/remote/login";', resolveDir: process.cwd() },
   bundle: true, write: false, format: "esm", platform: "node",
 });
-const { terminalInput, terminalKey, REMOTE_KEYS, PendingTerminalSequence, TerminalMirror, resolveRemotePermission, readRemoteDefaults, InputHistory, INPUT_HISTORY_KEY, KeyRepeat } = await import(
+const { terminalInput, terminalKey, notificationSessionKey, REMOTE_KEYS, PendingTerminalSequence, TerminalMirror, resolveRemotePermission, readRemoteDefaults, InputHistory, INPUT_HISTORY_KEY, KeyRepeat, pairRemoteBrowser } = await import(
   "data:text/javascript;base64," + Buffer.from(bundle.outputFiles[0].contents).toString("base64")
 );
 const write = (terminal, text) => new Promise(resolve => terminal.write(text, resolve));
@@ -23,6 +23,39 @@ const historyStorage = () => {
   const values = new Map();
   return { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
 };
+
+test("notification links identify the shared session across pairing", () => {
+  const key = "e8ade91b-79fe-455e-9d39-8532d7fd1ff1";
+  assert.equal(notificationSessionKey("#session=" + key), key);
+  assert.equal(notificationSessionKey("#pair=ticket&session=" + key.toUpperCase()), key);
+  assert.equal(notificationSessionKey("#pair=ticket"), null);
+  assert.equal(notificationSessionKey("#session=1"), null);
+});
+
+test("notification pairing prioritizes existing login and passwords and explains expired tickets", async context => {
+  let status = { authenticated: true, passwordEnabled: false, passwordAllowed: true };
+  let paired = true;
+  const requests = [];
+  context.mock.method(globalThis, "fetch", async (path, options) => {
+    requests.push([path, options]);
+    return path === "/api/auth" ? { ok: true, json: async () => status } : { ok: paired };
+  });
+  await pairRemoteBrowser("used-ticket", true);
+  assert.equal(requests.length, 1);
+  status = { ...status, authenticated: false, passwordEnabled: true };
+  await pairRemoteBrowser("old-ticket", true);
+  assert.equal(requests.length, 2);
+  status.passwordEnabled = false;
+  await pairRemoteBrowser("fresh-ticket", true);
+  assert.equal(requests.at(-1)[0], "/api/pair");
+  assert.deepEqual(JSON.parse(requests.at(-1)[1].body), { token: "fresh-ticket" });
+  status.passwordEnabled = true;
+  await pairRemoteBrowser("qr-ticket", false);
+  assert.equal(requests.at(-1)[0], "/api/pair");
+  status.passwordEnabled = false;
+  paired = false;
+  await assert.rejects(pairRemoteBrowser("expired-ticket", true), /打开会话/);
+});
 
 test("input history preserves original Chinese and multiline drafts, deduplicates and searches across sessions", () => {
   const storage = historyStorage();

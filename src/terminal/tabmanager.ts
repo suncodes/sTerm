@@ -2,12 +2,14 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { b64ToU8 } from "../util";
 import { TerminalSession } from "./session";
 import { AGENT_STATUS_LABELS } from "./agentstate";
+import type { AgentEvent } from "./agentevents";
 import type { AgentName, ShellInfo } from "../types";
 
 interface OutputPayload {
   id: number;
   generation: number;
   data: string;
+  inputRevision?: number;
 }
 
 interface ExitPayload {
@@ -18,6 +20,7 @@ interface ExitPayload {
 export interface TabManagerOptions {
   /** 状态、名称、活动标签及会话增删的统一通知。 */
   onSessionsChange?: (tabs: TabManager) => void;
+  onAgentEvent?: (session: TerminalSession, event: AgentEvent, inputRevision?: number) => void;
   tabsEl: HTMLElement;
   panesEl: HTMLElement;
   shell: ShellInfo;
@@ -62,7 +65,7 @@ export class TabManager {
     // 全局 PTY 事件 → 按会话 id 分发
     this.listenersReady = Promise.all([
       listen<OutputPayload>("pty-output", (e) => {
-        this.byId(e.payload.id)?.handleOutput(e.payload.generation, b64ToU8(e.payload.data));
+        this.byId(e.payload.id)?.handleOutput(e.payload.generation, b64ToU8(e.payload.data), e.payload.inputRevision);
       }),
       listen<ExitPayload>("pty-exit", (e) => {
         this.byId(e.payload.id)?.handleExit(e.payload.generation);
@@ -92,6 +95,7 @@ export class TabManager {
       onSaveToWorkspace: this.opts.onSaveToWorkspace,
       onLifecycle: () => this.opts.onSessionsChange?.(this),
       onAgentStatus: (session) => this.handleAgentStatus(session),
+      onAgentEvent: this.opts.onAgentEvent,
       onSidebarToggle: this.opts.onSidebarToggle,
       onNewTab: () => void this.newTab(),
       onCloseTab: () => this.closeActive(),

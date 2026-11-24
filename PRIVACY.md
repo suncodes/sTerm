@@ -15,6 +15,7 @@ sTerm 是本地桌面应用。默认不发起遥测、分析或账号登录请�
 | Pi 事件信箱 | %LOCALAPPDATA%\sTerm\events | 在应用运行期间转发 Pi 的状态事件；会话结束后自动清理 |
 | WebView 本地设置 | 应用 WebView 存储 | 保存界面字号、侧栏宽度、远程默认权限与监听偏好 |
 | 可选公网组件与凭证 | %LOCALAPPDATA%\io.github.suncodes.sterm\remote-tools | 按需下载的隧道客户端、文件校验值、Cloudflare 地址与当前 Windows 用户 DPAPI 加密的运行凭证 |
+| 飞书机器人凭证 | %LOCALAPPDATA%\io.github.suncodes.sterm\notifications\feishu.credential | 飞书 App ID、App Secret、群 Chat ID 与授权用户 ID，使用当前 Windows 用户 DPAPI 加密；仅在启用通知时连接飞书 |
 | 可选远程访问码 | %LOCALAPPDATA%\io.github.suncodes.sterm\remote-auth | 随机盐与 PBKDF2 校验信息、可恢复的 6 位访问码一起使用当前 Windows 用户 DPAPI 加密；磁盘不保存明文，仅本机设置可主动查看或复制 |
 | 远程输入历史 | 远程浏览器当前访问地址的 localStorage | 保存最近 100 条远程发送的命令或提示词、来源会话名称与时间，供搜索和回填 |
 
@@ -27,6 +28,12 @@ sTerm 默认不改写 PowerShell profile、Claude/Codex 配置或 Pi 配置。
 - 在「设置 → 集成」安装 PowerShell 集成时，sTerm 仅向当前 $PROFILE 写入带有 sTerm 标记的 OSC 7 代码块。移除操作只删除该代码块；每次变更前保留同目录 .bak 备份。
 - 在同一页面安装/更新 Agent 集成时，Claude/Codex 仅清理旧版 sTerm Hook，Pi 仅在本机已安装 Pi 时写入其 sterm-events.ts 扩展。已有配置修改前同样保留 .bak 备份。
 - WSL、Linux、macOS 或 SSH 远端的可选安装器需要由用户在对应环境中手动运行，说明见 [integrations/README.md](integrations/README.md)。
+
+## 飞书通知
+
+在「设置 → 通知」主动启用后，sTerm 通过飞书企业自建应用的加密 WebSocket 长连接接收授权群消息，并向配置的群发送完成卡片。卡片只包含会话标题、Agent 名称、会话编号、完成时间和可选的远程会话链接。电脑端可填写允许续问的 Open ID，或在名单留空时开启「允许群内所有用户续问」。符合授权条件的群成员在对应完成话题中 @ 机器人发送的普通文本会写入原会话。斜杠命令、感叹号命令、控制字符和未授权用户消息会被拒绝。飞书凭证和配置使用当前 Windows 用户 DPAPI 加密保存。
+
+通知链接优先使用已有浏览器授权。启用 6 位访问码时，未授权浏览器通过访问码登录。未启用访问码时，卡片包含一次性临时配对凭证，有效期为 5 分钟，持有者可按当前远程分享权限访问。授权用户可在原话题中发送「打开会话」获取新链接。此消息由机器人处理，临时凭证不写入诊断日志。
 
 ## 可选远程访问
 

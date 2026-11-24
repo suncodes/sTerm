@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { TabManager } from "./terminal/tabmanager";
 import { AgentOverlay } from "./overlay/controller";
 import { RemoteController } from "./remote/controller";
+import { FeishuNotifications } from "./notifications/feishu";
 import type { TerminalSession } from "./terminal/session";
 import { WorkspaceStore } from "./workspaces/store";
 import { Sidebar, closeAllMenus } from "./workspaces/sidebar";
@@ -63,6 +64,7 @@ async function main(): Promise<void> {
 
   const overlay = new AgentOverlay((id) => tabs.activate(id));
   let remote: RemoteController | undefined;
+  const notifications = new FeishuNotifications();
 
   // 多标签终端
   const tabs = new TabManager({
@@ -70,6 +72,7 @@ async function main(): Promise<void> {
     panesEl: document.getElementById("panes")!,
     shell,
     onAgent: (session, agent) => agentFlow(session, agent, store),
+    onAgentEvent: (session, event, revision) => notifications.report(session, event, revision),
     onSidebarToggle: toggleSidebar,
     onSearchOpen: () => openSearch(),
     onSessionsChange: (manager) => {
@@ -91,6 +94,7 @@ async function main(): Promise<void> {
 
   remote = new RemoteController(tabs);
   await remote.init();
+  await notifications.init(tabs).catch(() => showToast("飞书通知初始化失败"));
 
   void overlay.init().then(() => overlay.sync(tabs.sessions, tabs.active?.id)).catch((error) => {
     console.error("悬浮窗初始化失败", error);

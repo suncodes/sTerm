@@ -1,12 +1,12 @@
 import "@xterm/xterm/css/xterm.css";
 import "./mobile.css";
 import { Terminal } from "@xterm/xterm";
-import { terminalKey, terminalInput, type SharedSession, type TerminalModifiers } from "./types";
+import { terminalKey, terminalInput, notificationSessionKey, type SharedSession, type TerminalModifiers } from "./types";
 import { TerminalMirror } from "./mirror";
 import { AGENT_STATUS_LABELS } from "../terminal/agentstate";
 import { InputHistory, INPUT_HISTORY_KEY } from "./history";
 import { HistoryPanel } from "./historypanel";
-import { RemoteLogin, type AuthStatus } from "./login";
+import { RemoteLogin, pairRemoteBrowser, type AuthStatus } from "./login";
 import { KeyRepeat } from "./keyrepeat";
 
 const element = <ElementType extends HTMLElement>(id: string): ElementType => document.getElementById(id) as ElementType;
@@ -42,6 +42,7 @@ let reconnectDelay = 1000;
 let shared: SharedSession[] = [];
 let current: SharedSession | undefined;
 let attachedKey = "";
+let linkedSessionKey = notificationSessionKey(location.hash);
 let clientId = "";
 let screenReady = false;
 let lastSeq = 0;
@@ -155,7 +156,7 @@ function renderSessions(): void {
     tab.className = "client-tab";
     tab.setAttribute("role", "tab");
     tab.setAttribute("aria-selected", String(selected));
-    tab.tabIndex = selected ? 0 : -1;
+    tab.tabIndex = selected || (!current && session === shared[0]) ? 0 : -1;
     tab.dataset.sessionKey = sessionKey(session);
     const dot = document.createElement("span");
     dot.className = "status-dot";
@@ -168,7 +169,7 @@ function renderSessions(): void {
     badge.textContent = statusLabel;
     badge.hidden = !statusLabel;
     tab.append(dot, label, badge);
-    tab.onclick = () => attach(session);
+    tab.onclick = () => selectSession(session);
     tabList.append(tab);
     const row = document.createElement("button");
     row.className = "sheet-session";
@@ -184,7 +185,7 @@ function renderSessions(): void {
     const mark = document.createElement("span");
     mark.className = "selected-mark"; mark.textContent = selected ? "✓" : "";
     row.append(dot.cloneNode(true), description, mark);
-    row.onclick = () => { closeSheet(); if (!selected) attach(session); };
+    row.onclick = () => { closeSheet(); if (!selected) selectSession(session); };
     list.append(row);
   }
   if (focusedKey && !backdrop.hidden && backdrop.dataset.sheet === "sessions") {
@@ -216,12 +217,23 @@ function attach(session: SharedSession): void {
   connectionState("正在同步…", "connecting");
   attachedKey = send({ type: "attach", id: session.id, generation: session.generation }) ? sessionKey(session) : "";
 }
+function selectSession(session: SharedSession): void {
+  if (linkedSessionKey) {
+    linkedSessionKey = null;
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+  attach(session);
+}
 function roster(list: SharedSession[]): void {
   shared = list;
-  const selected = current && shared.find(session => sessionKey(session) === sessionKey(current!));
+  const currentKey = current && sessionKey(current);
+  const selected = linkedSessionKey
+    ? shared.find(session => session.linkKey === linkedSessionKey)
+    : shared.find(session => sessionKey(session) === currentKey);
+  const linkUnavailable = Boolean(linkedSessionKey && !selected);
   for (const key of drafts.keys()) if (!shared.some(session => sessionKey(session) === key)) drafts.delete(key);
   for (const key of undoDrafts.keys()) if (!shared.some(session => sessionKey(session) === key)) undoDrafts.delete(key);
-  if (!shared.length) {
+  if (!shared.length || linkUnavailable) {
     current = undefined; draft.value = "";
     attachedKey = "";
     screenReady = false; awaitingSnapshot = true;
@@ -234,6 +246,7 @@ function roster(list: SharedSession[]): void {
   } else {
     attach(selected ?? shared[0]);
   }
+  if (linkUnavailable) showNotice("原会话已关闭、重启或取消分享。请从会话列表选择其他终端。");
 }
 function disconnected(): void {
   rememberDraft();
@@ -457,8 +470,7 @@ element("session-tabs").onkeydown = event => {
   const index = tabs.indexOf(document.activeElement as HTMLButtonElement);
   const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
   event.preventDefault();
-  const session = shared[next];
-  attach(session);
+  selectSession(shared[next]);
   element("session-tabs").querySelectorAll<HTMLButtonElement>("button")[next]?.focus();
 };
 element("claim").onclick = () => { if (current && screenReady) send({ type: "claim", id: current.id, generation: current.generation }); };
@@ -572,10 +584,10 @@ window.addEventListener("storage", event => {
 
 async function start(): Promise<void> {
   const token = new URLSearchParams(location.hash.slice(1)).get("pair");
-  history.replaceState(null, "", location.pathname);
   if (token) {
-    const response = await fetch("/api/pair", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }), credentials: "same-origin" });
-    if (!response.ok) throw new Error("配对二维码已失效或已使用，请在电脑端重新生成，或输入访问码。");
+    const fragment = linkedSessionKey ? "#session=" + linkedSessionKey : "";
+    history.replaceState(null, "", location.pathname + location.search + fragment);
+    await pairRemoteBrowser(token, Boolean(linkedSessionKey));
   }
   await connect();
 }
@@ -583,7 +595,13 @@ function pairingFailed(error: unknown): void {
   requireLogin(error instanceof Error ? error.message : String(error));
 }
 window.addEventListener("hashchange", () => {
-  if (new URLSearchParams(location.hash.slice(1)).has("pair")) void start().catch(pairingFailed);
+  const previous = linkedSessionKey;
+  linkedSessionKey = notificationSessionKey(location.hash);
+  if (new URLSearchParams(location.hash.slice(1)).has("pair")) {
+    void start().catch(pairingFailed);
+  } else if (linkedSessionKey !== previous && connected()) {
+    void connect();
+  }
 });
 updateSize(80, 24);
 syncControls();

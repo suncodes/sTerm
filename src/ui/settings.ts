@@ -13,6 +13,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { OverlaySnapshot } from "../overlay/types";
 import type { RemoteController } from "../remote/controller";
 import { renderRemoteSettings } from "../remote/settings";
+import { renderFeishuSettings } from "../notifications/settings";
 
 const KEY_TAB = "sterm-font-tab";
 const KEY_SIDEBAR = "sterm-font-sidebar";
@@ -540,6 +541,11 @@ export function openSettings(cb: SettingsCallbacks): void {
       const remote = renderRemoteSettings(cb.remote);
       disposePage = remote.dispose;
       return remote.page;
+    } },
+    { id: "notifications", label: "通知", render: () => {
+      const notifications = renderFeishuSettings();
+      disposePage = notifications.dispose;
+      return notifications.page;
     } },
     { id: "integrations", label: "集成", render: renderIntegrations },
     { id: "about", label: "关于", render: renderAbout },
