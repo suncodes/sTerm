@@ -45,10 +45,13 @@
     <div id="connection-banner" class="connection-banner" hidden><svg class="icon"><use href="#i-wifi"/></svg><span>连接已断开，草稿已保留；恢复后不会自动重发。</span><button data-reconnect>重连</button></div>
     <div id="agent-notice" class="operation-error" role="status" hidden><svg class="icon"><use href="#i-alert"/></svg><span id="notice-text"></span><button id="dismiss-notice" class="touch-button" aria-label="关闭提示"><svg class="icon"><use href="#i-close"/></svg></button></div>
     <section id="conversation" class="conversation" aria-label="Agent 会话内容"><div id="agent-messages" class="messages" role="log" aria-live="off"></div><div id="agent-empty" class="empty-conversation" hidden><svg class="icon"><use href="#i-monitor"/></svg><h2>还没有共享的 Agent 会话</h2><p>在电脑端 sTerm 终端中使用已启用接入的 Claude 或 Codex，会话会自动显示在这里。</p><small>可访问的会话由电脑端分享设置决定</small></div></section>
+    <section id="interaction-dock" class="approval-dock" aria-label="待处理交互" hidden></section>
+    <div id="task-bar" class="queue-bar" hidden><span id="task-text"></span><button data-open="tasks">查看子任务</button></div>
+    <div id="agent-activity-detail" class="activity-detail" role="status" hidden></div>
     <section id="agent-approvals" class="approval-dock" aria-label="工具审批" hidden></section>
     <div id="activity-bar" class="activity-bar"><span id="activity-dot" class="status-dot"></span><span id="activity-text">等待会话</span><button id="agent-stop" class="stop-button" disabled hidden><svg class="icon"><use href="#i-stop"/></svg>停止生成</button></div>
     <div id="queue-bar" class="queue-bar" hidden><span><svg class="icon"><use href="#i-check"/></svg><span id="queue-text"></span></span><button data-open="queue">查看</button></div>
-    <section id="composer" class="composer"><form id="agent-composer"><div class="draft-field"><label class="sr-only" for="agent-draft">发送给当前 Agent</label><textarea id="agent-draft" rows="2" placeholder="继续这个会话…" spellcheck="false" disabled></textarea><div class="draft-footer"><span id="agent-input-hint">电脑端与网页均可操作</span><span class="key-hint">Ctrl + Enter</span></div></div><button id="agent-send" type="submit" class="send-button" disabled>发送</button></form></section>
+    <section id="composer" class="composer"><form id="agent-composer"><div class="draft-field"><label class="sr-only" for="agent-draft">发送给当前 Agent</label><textarea id="agent-draft" rows="2" placeholder="继续这个会话…" spellcheck="false" disabled></textarea><div class="draft-footer"><span id="agent-input-hint">电脑端与网页均可操作</span><span class="key-hint">Ctrl + Enter</span></div></div><button id="queue-add" type="button" class="subtle-button" hidden>加入队列</button><button id="agent-send" type="submit" class="send-button" disabled>发送</button></form></section>
     <div id="composer-unavailable" class="composer-unavailable" hidden></div>
   </main>
   <div id="toast" class="toast" role="status" hidden></div>

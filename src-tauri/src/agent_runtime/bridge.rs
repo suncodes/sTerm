@@ -18,7 +18,7 @@ fn allowed(hub: &SharedHub, id: &str, headers: &HeaderMap, peer: SocketAddr) -> 
 
 async fn poll(State(hub): State<SharedHub>, Path(id): Path<String>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap) -> Result<Json<Value>, StatusCode> {
     if !allowed(&hub, &id, &headers, peer) { return Err(StatusCode::UNAUTHORIZED); }
-    Ok(Json(json!({ "commands": hub.commands(&id) })))
+    Ok(Json(json!({ "commands": hub.bridge_commands(&id) })))
 }
 
 async fn claim(State(hub): State<SharedHub>, Path(id): Path<String>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Json(command): Json<super::protocol::Command>) -> Result<Json<Value>, StatusCode> {
@@ -35,13 +35,31 @@ async fn event(State(hub): State<SharedHub>, Path(id): Path<String>, ConnectInfo
     Ok(Json(json!({ "ok": true })))
 }
 
+async fn wait_interaction(State(hub): State<SharedHub>, Path((id, request)): Path<(String,String)>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap) -> Result<Json<Value>, StatusCode> {
+    if !allowed(&hub, &id, &headers, peer) { return Err(StatusCode::UNAUTHORIZED); }
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(24);
+    loop {
+        let notified = hub.changed.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        match hub.interaction_command(&id, &request) {
+            Ok(Some(command)) => {
+                if hub.claim(&id, &command).is_ok() { return Ok(Json(json!({"command":command}))); }
+            }
+            Err(_) => return Ok(Json(json!({"resolved":true}))),
+            _ => {}
+        }
+        if tokio::time::timeout_at(deadline,notified).await.is_err() { return Ok(Json(json!({"waiting":true}))); }
+    }
+}
+
 impl Bridge {
     pub async fn start(hub: SharedHub) -> Result<Self, String> {
         let listener = tokio::net::TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).await.map_err(|e| e.to_string())?;
         let address = format!("http://127.0.0.1:{}", listener.local_addr().map_err(|e| e.to_string())?.port());
         let shutdown = Arc::new(Notify::new());
         let done = shutdown.clone();
-        let router = Router::new().route("/bridge/{id}/poll", get(poll)).route("/bridge/{id}/event", post(event)).route("/bridge/{id}/claim", post(claim))
+        let router = Router::new().route("/bridge/{id}/poll", get(poll)).route("/bridge/{id}/event", post(event)).route("/bridge/{id}/claim", post(claim)).route("/bridge/{id}/wait/{request}", get(wait_interaction))
             .layer(DefaultBodyLimit::max(1024 * 1024)).with_state(hub);
         tokio::spawn(async move {
             let _ = axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
@@ -51,4 +69,3 @@ impl Bridge {
     }
 }
 impl Drop for Bridge { fn drop(&mut self) { self.shutdown.notify_one(); } }
-

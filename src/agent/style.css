@@ -174,3 +174,23 @@ body{font:12px "Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;background:v
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 
 p,h1,h2,h3,pre{margin:0}.sheet-description{margin:0}.agent-item-user .agent-content{font-size:inherit}
+.interaction-prompt{display:flex;align-items:center;justify-content:space-between;gap:14px;width:100%;min-height:52px;border:1px solid #60606b;border-radius:5px;background:#38383e;text-align:left;padding:9px 12px;margin:4px 0;font-size:12px}
+.interaction-prompt strong,.interaction-prompt small{display:block}.interaction-prompt small{margin-top:5px;color:#b9b9c4;font-size:11px}
+.interaction-decisions{display:flex;flex-wrap:wrap;gap:9px;margin:18px 0}.interaction-decisions button,.confirm-actions button{min-height:44px}
+#interaction-form fieldset{border:1px solid #55555f;border-radius:5px;padding:12px;margin:17px 0}
+#interaction-form legend{padding:0 6px;line-height:1.8;font-size:13px;max-width:100%;overflow-wrap:anywhere}
+.question-option{display:flex;gap:12px;align-items:flex-start;min-height:44px;padding:12px 8px;border-bottom:1px solid #48484f;cursor:pointer}
+.question-option input{margin-top:5px;min-width:18px;min-height:18px;accent-color:#aebcd0}.question-option span{min-width:0}
+.question-option strong{font-size:13px;font-weight:500;line-height:1.7}.question-option small,.form-field small{display:block;line-height:1.7;font-size:12px;color:#b9b9c5}
+.question-notes,.form-field{display:block;font-size:12px;margin-top:14px;line-height:1.8}
+.question-notes textarea,.form-field input,.form-field select,.queued-item textarea{display:block;width:100%;border:1px solid #646470;background:#29292f;border-radius:4px;padding:9px;color:inherit;font:inherit;min-height:44px;margin-top:7px}
+.form-field select[multiple]{min-height:110px}.queued-item{margin:14px 0}.queued-item textarea{font-size:14px;min-height:85px;line-height:1.6}
+#sheet :focus-visible{outline:2px solid #b4c9e5;outline-offset:3px}.external-link{display:block;padding:12px;min-height:44px;color:#c9d9ee;text-decoration:underline;overflow-wrap:anywhere}
+.activity-detail{padding:10px 16px;border-top:1px solid #57575f;background:#39373a;font-size:12px;line-height:1.8;max-height:20vh;overflow:auto;overflow-wrap:anywhere}
+.status-dot[data-state=retrying]{background:#d9b97e}.status-dot[data-state=failed],.status-dot[data-state=blocked]{background:#d6a6aa}
+#sheet-layer[data-sheet=interaction] .sheet,#sheet-layer[data-sheet=task-detail] .sheet{max-width:620px}
+#interaction-dock{max-height:25%;overflow:auto}
+#task-content{font-size:12px;padding-top:16px}#task-content .agent-item-user{margin-left:0}
+@media(max-width:520px){#interaction-form input,#interaction-form textarea,#interaction-form select,.queued-item textarea{font-size:16px}#queue-add{padding:0 9px;font-size:11px}.activity-detail{padding:8px 13px}}
+.decision-rule{flex-basis:100%;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.7 Consolas,monospace;background:#29292e;border:1px solid #55555f;border-radius:4px;padding:10px}
+.question-notes input[type=password]{display:block;width:100%;min-height:44px;background:#29292f;border:1px solid #646470;border-radius:4px;color:inherit;padding:9px;font:inherit}

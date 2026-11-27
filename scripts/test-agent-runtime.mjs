@@ -26,3 +26,29 @@ test("native approval closure and settings changes converge after incremental re
   assert.equal(next.model, "b");
   assert.equal(next.settingsRevision, 3);
 });
+test("typed questions, retries, subagent content and queue converge without claiming completion", () => {
+  const original = session();
+  const result = applyChanges(original, [
+    { seq: 5, events: [{ type: "interaction", interaction: { id: "q", kind: "question", agentId: "child", blocking: true } }, { type:"task", task:{ id:"child", state:"waiting" } }] },
+    { seq: 6, events: [{ type: "upsert", item: { id:"child:a", agentId:"child", kind:"assistant", text:"child text" } },{ type:"queue",items:[{id:"one",text:"queued"}] }] },
+    { seq: 7, events: [{ type:"activity",value:{kind:"retrying",message:"upstream retry"} },{type:"state",state:"retrying",turnId:"turn"}] },
+    { seq: 8, events: [{ type:"items",items:[{id:"main",text:"main refreshed"}] },{type:"resolved",id:"q"}] }
+  ]);
+  assert.equal(result.state, "retrying");
+  assert.equal(result.tasks[0].state, "waiting");
+  assert.deepEqual(result.interactions, []);
+  assert.equal(result.items.find(i=>i.agentId==="child").text,"child text");
+  assert.equal(result.queuedInputs[0].id,"one");
+  assert.equal(result.activity.message,"upstream retry");
+  assert.equal(original.items.length,1);
+});
+
+test("session replacement clears old answers, child content and queue, and blocked state survives", () => {
+  const original = {...session(), interactions:[{id:"old"}],tasks:[{id:"old-child"}],queuedInputs:[{id:"old-queue"}]};
+  const result = applyChanges(original,[
+    {seq:5,events:[{type:"ready",sessionId:"replacement",model:"a",models:[],capabilities:{}}]},
+    {seq:6,events:[{type:"state",state:"blocked",turnId:""}]}
+  ]);
+  assert.equal(result.state,"blocked");
+  assert.deepEqual([result.interactions,result.tasks,result.queuedInputs,result.items],[[],[],[],[]]);
+});

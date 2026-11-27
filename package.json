@@ -20,7 +20,7 @@
     "prebuild": "npm run version:check",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "node --test scripts/test-agent-events.mjs scripts/test-agent-overlay.mjs scripts/test-agent-runtime.mjs scripts/test-version.mjs scripts/test-remote.mjs && python scripts/test-agent-integration.py",
+    "test": "node --test scripts/test-agent-events.mjs scripts/test-agent-overlay.mjs scripts/test-agent-runtime.mjs scripts/test-agent-mod.mjs scripts/test-version.mjs scripts/test-remote.mjs && python scripts/test-agent-integration.py",
     "test:agent-mode": "pwsh -NoProfile -File scripts/test-agent-mode.ps1",
     "test:remote": "node --test scripts/test-remote.mjs && cargo test --manifest-path src-tauri/Cargo.toml remote::tests && cargo test --manifest-path src-tauri/Cargo.toml tunnel::tests",
     "version:set": "node scripts/version.mjs set",

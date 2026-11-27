@@ -1,25 +1,45 @@
-export interface AgentItem { id: string; kind: string; title: string; text: string; status: string; turnId: string }
+export interface AgentItem { id: string; kind: string; title: string; text: string; status: string; turnId: string; agentId?: string }
 export interface AgentApproval { id: string; title: string; detail: string; turnId: string }
+export interface AgentOption { label: string; description?: string; preview?: string }
+export interface AgentQuestion { id: string; title: string; header?: string; multiSelect?: boolean; secret?: boolean; other?: boolean; preview?: string; options?: AgentOption[] | null }
+export interface AgentInteraction {
+  id: string; kind: string; title: string; detail: string; turnId: string; agentId: string; blocking: boolean;
+  data: { questions?: AgentQuestion[]; cancellable?: boolean; decisions?: { label: string; value: unknown }[];
+    schema?: Record<string, unknown>; url?: string; permissions?: unknown; [key: string]: unknown };
+}
+export interface AgentTask { id: string; parentId: string; title: string; model: string; state: string; turnId: string; message: string }
+export interface AgentPermission { profile: string; label: string; description?: string; approvalPolicy: string; reviewer: string; allowed: boolean }
 export interface AgentSession {
   protocolVersion: number;
   runtimeId: string; sessionId: string; tabId: number; generation: number; agent: "claude" | "codex";
   title: string; cwd: string; model: string; models: string[]; policy: string; state: string;
   turnId: string; seq: number; settingsRevision: number; shared: boolean; allowControl: boolean; error: string | null;
-  capabilities: { send: boolean; stop: boolean; models: boolean; plan: boolean; policy: boolean; approvals: boolean; end?: boolean };
-  items: AgentItem[]; approvals: AgentApproval[];
+  capabilities: { send: boolean; stop: boolean; models: boolean; plan: boolean; policy: boolean; approvals: boolean; end?: boolean; queue?: boolean };
+  items: AgentItem[]; approvals: AgentApproval[]; interactions: AgentInteraction[]; tasks: AgentTask[];
+  permissions: { current?: { profile: string; approvalPolicy: string; reviewer: string }; options?: AgentPermission[] };
+  queuedInputs: { id: string; text: string }[]; activity: { kind?: string; message?: string; details?: unknown };
 }
 export interface AgentRoster { revision: number; sessions: AgentSession[] }
 export type AgentAction = { action: "sendText"; text: string } | { action: "stopTurn"; turnId: string } |
   { action: "setModel"; model: string } | { action: "setPolicy"; sandbox: string; approvalPolicy: string } | { action: "enterPlan" } |
-  { action: "respondApproval"; requestId: string; allow: boolean };
+  { action: "setPermissions"; profile: string; approvalPolicy: string; reviewer: string } |
+  { action: "respondApproval"; requestId: string; allow: boolean } |
+  { action: "respondInteraction"; requestId: string; response: unknown } |
+  { action: "queue"; operation: "add" | "update" | "delete" | "reorder" | "start"; queueId?: string; text?: string; ids?: string[] };
 
 export type AgentEvent =
   | { type: "ready"; sessionId: string; model: string; models: string[]; capabilities: AgentSession["capabilities"] }
   | { type: "state"; state: string; turnId: string }
   | { type: "items"; items: AgentItem[] }
+  | { type: "taskItems"; agentId: string; items: AgentItem[] }
   | { type: "upsert"; item: AgentItem }
   | { type: "delta"; id: string; delta: string }
   | { type: "settings"; model?: string | null; policy?: string | null }
+  | { type: "permissions"; value: AgentSession["permissions"] }
+  | { type: "queue"; items: AgentSession["queuedInputs"] }
+  | { type: "activity"; value: AgentSession["activity"] }
+  | { type: "task"; task: AgentTask }
+  | { type: "interaction"; interaction: AgentInteraction }
   | { type: "approval"; approval: AgentApproval }
   | { type: "resolved"; id: string }
   | { type: "error"; message: string }

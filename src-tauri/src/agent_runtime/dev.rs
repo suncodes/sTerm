@@ -11,6 +11,7 @@ pub fn start(app: AppHandle) {
     let outbox = root.join("probe-result.json");
     tauri::async_runtime::spawn(async move {
         let mut previous = std::fs::read_to_string(&inbox).unwrap_or_default();
+        let _=std::fs::write(root.join("probe-ready"),"ready");
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             let Ok(text) = std::fs::read_to_string(&inbox) else { continue };
@@ -62,6 +63,18 @@ async fn run(app: &AppHandle, command: &Value) -> Result<Value, String> {
             let client=server.as_ref().ok_or("Codex backend")?.client.clone();
             drop(server);
             client.call("thread/turns/list",json!({"threadId":thread,"limit":1,"sortDirection":"desc"})).await
+        }
+        "codex_mode" => {
+            let session=state.hub.snapshot(command["runtimeId"].as_str().ok_or("runtime")?,false)?;
+            let mode=command["mode"].as_str().filter(|m|["plan","default"].contains(m)).ok_or("mode")?;
+            let server=state.codex.lock().await;
+            let client=server.as_ref().ok_or("Codex backend")?.client.clone();drop(server);
+            client.call("thread/settings/update",json!({"threadId":session.session_id,"collaborationMode":{"mode":mode,"settings":{"model":session.model,"reasoning_effort":null,"developer_instructions":null}}})).await
+        }
+        "codex_features" => {
+            let server=state.codex.lock().await;
+            let client=server.as_ref().ok_or("Codex backend")?.client.clone();drop(server);
+            client.call("experimentalFeature/list",json!({"limit":100,"cursor":command["cursor"]})).await
         }
         "disconnect_codex" => {
             let server = state.codex.lock().await;

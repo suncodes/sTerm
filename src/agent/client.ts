@@ -3,7 +3,8 @@ import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { RemoteLogin, pairRemoteBrowser } from "../remote/login";
 import { applyChanges } from "./state";
-import type { AgentChange, AgentAction, AgentItem, AgentRoster, AgentSession } from "./types";
+import { interactionHtml, readInteraction, tasksHtml, taskLabel } from "./interactions";
+import type { AgentChange, AgentAction, AgentItem, AgentRoster, AgentSession, AgentInteraction, AgentPermission } from "./types";
 
 const byId = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 const list=byId("agent-sessions"), messages=byId("agent-messages"), approvals=byId("agent-approvals"), conversation=byId("conversation");
@@ -11,18 +12,23 @@ const draft=byId<HTMLTextAreaElement>("agent-draft"), model=byId<HTMLSelectEleme
 const notice=byId("agent-notice"), connection=byId("agent-connection");
 const snapshots=new Map<string,AgentSession>(), drafts=new Map<string,string>(), itemNodes=new Map<string,{node:HTMLElement;text:string}>();
 const pendingApprovals=new Set<string>(), submitting=new Set<string>(), queues=new Map<string,string[]>();
+const interactionDrafts=new Map<string,{name:string;value:string;checked:boolean;selected?:boolean[]}[]>(), seenInteractions=new Set<string>();
+let permissionChoice:AgentPermission|undefined;
 const storedSession="sterm-agent-selection";
 let roster:AgentSession[]=[],current="",authenticated=false,polling=false,connected=false,wasConnected=false;
 let sheetType="",sheetRequest="",sheetKey="",beforeSheet:HTMLElement|null=null,toastTimer:number,displaySize=13;
 try{current=sessionStorage.getItem(storedSession)??"";}catch{/* 隐私模式使用内存。 */}
-const labels:Record<string,string>={connecting:"连接中",idle:"空闲",running:"运行中",waiting:"等待审批",offline:"Agent 已断开",exited:"已结束"};
+const labels:Record<string,string>={connecting:"连接中",idle:"空闲",running:"运行中",waiting:"等待回答",retrying:"API 重试中",failed:"本轮失败",interrupted:"已中断",blocked:"等待电脑端处理",offline:"Agent 已断开",exited:"已结束"};
 const login=new RemoteLogin(byId("login-panel"),()=>void authenticate());
 const esc=(value:unknown):string=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!));
 const icon=(name:string):string=>'<svg class="icon" aria-hidden="true"><use href="#i-'+name+'"/></svg>';
 const active=():AgentSession|undefined=>snapshots.get(current);
-const busy=(row=active()):boolean=>row?.state==="running"||row?.state==="waiting";
+const busy=(row=active()):boolean=>["running","waiting","retrying"].includes(row?.state??"");
 function writable(row=active()):boolean{return Boolean(connected&&row?.allowControl&&!["offline","connecting","exited"].includes(row.state));}
 function policyLabel(row:AgentSession):string{
+  const selected=row.permissions?.options?.find(p=>p.profile===row.permissions?.current?.profile&&p.approvalPolicy===row.permissions.current.approvalPolicy&&p.reviewer===row.permissions.current.reviewer);
+  if(selected)return selected.label;
+  if(row.permissions?.current?.profile===":danger-full-access")return "Full Access";
   if(row.agent==="claude")return row.policy==="plan"?"Plan":row.policy==="acceptEdits"?"允许编辑":row.policy||"由 Claude 管理";
   return row.policy.startsWith("workspaceWrite")?"工作区写入":row.policy.startsWith("readOnly")?"只读":row.policy||"由 Codex 管理";
 }
@@ -40,28 +46,35 @@ async function request<T>(path:string,body?:unknown):Promise<T>{
   return response.json() as Promise<T>;
 }
 function syncControls():void{
-  const row=active(),write=writable(),available=write&&Boolean(row?.capabilities.send),sending=submitting.has(current);
+  const row=active(),write=writable(),available=write&&Boolean(row?.capabilities.send)&&row?.state!=="blocked",sending=submitting.has(current);
   draft.disabled=!available||sending;
   byId<HTMLButtonElement>("agent-send").disabled=!available||sending||!draft.value.trim();
   byId("agent-send").textContent=sending?"确认中…":busy()?"追加":"发送";
   byId("composer").hidden=!available;
   byId("composer-unavailable").hidden=available;
-  byId("composer-unavailable").textContent=!row?"在电脑终端使用 Agent 后，从会话列表选择":!connected?"草稿已保留，恢复连接后可继续发送":row.state==="exited"?"会话已结束，内容已保留":!row.allowControl?"当前为只读，电脑端可修改分享权限":row.state==="offline"?"Agent 已断开，等待电脑端恢复":"正在连接 Agent…";
+  byId("composer-unavailable").textContent=!row?"在电脑终端使用 Agent 后，从会话列表选择":!connected?"草稿已保留，恢复连接后可继续发送":row.state==="exited"?"会话已结束，内容已保留":!row.allowControl?"当前为只读，电脑端可修改分享权限":row.state==="offline"?"Agent 已断开，等待电脑端恢复":row.state==="blocked"?"当前会话需要在电脑端处理恢复选项":"正在连接 Agent…";
   byId("agent-input-hint").textContent=busy()?"由当前 Agent 安排执行":"电脑端与网页均可操作";
   draft.placeholder=busy()?"补充要求，追加到当前会话…":"继续这个会话…";
   const stop=byId<HTMLButtonElement>("agent-stop");
   stop.hidden=!busy()||!row?.capabilities.stop||!row.allowControl;
   stop.disabled=!write||!row?.turnId;
-  byId<HTMLButtonElement>("model-button").disabled=!write||!row?.capabilities.models||row.state!=="idle";
-  byId<HTMLButtonElement>("policy-button").disabled=!write||!(row?.capabilities.policy||row?.capabilities.plan)||row.state!=="idle";
+  byId<HTMLButtonElement>("model-button").disabled=!write||!row?.capabilities.models||!["idle","failed","interrupted"].includes(row.state);
+  byId<HTMLButtonElement>("policy-button").disabled=!write||!(row?.capabilities.policy||row?.capabilities.plan)||!["idle","failed","interrupted"].includes(row.state);
   model.disabled=byId<HTMLButtonElement>("model-button").disabled;
   for(const button of approvals.querySelectorAll<HTMLButtonElement>("[data-decision]"))button.disabled=!write||!row?.capabilities.approvals||pendingApprovals.has(current+":"+button.closest<HTMLElement>("[data-request]")?.dataset.request);
   byId("connection-banner").hidden=connected;
-  const queued=queues.get(current)??[];
+  const addQueue=byId<HTMLButtonElement>("queue-add");
+  addQueue.hidden=!row?.capabilities.queue;addQueue.disabled=!available||sending||!draft.value.trim();
+  const queued=row?.capabilities.queue?(row.queuedInputs??[]):queues.get(current)??[];
   byId("queue-bar").hidden=!queued.length||!row;
-  byId("queue-text").textContent="已接受 "+queued.length+" 条追加消息，执行进度以 Agent 输出为准";
+  byId("queue-text").textContent=row?.capabilities.queue?"原生输入队列："+queued.length+" 条":"已接受 "+queued.length+" 条追加消息，执行进度以 Agent 输出为准";
+  for(const button of byId("interaction-dock").querySelectorAll<HTMLButtonElement>("button"))button.disabled=!connected;
+  if(sheetType==="queue")for(const button of byId("sheet").querySelectorAll<HTMLButtonElement>("button[data-queue-operation]")){button.disabled=!write||(button.dataset.queueOperation==="up"&&button.closest(".queued-item")===byId("sheet").querySelector(".queued-item"));}
+  if(sheetType==="interaction"){
+    for(const field of byId("sheet").querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,textarea,select,button:not([data-close-sheet])"))field.disabled=!write||pendingApprovals.has(current+":"+sheetRequest);
+  }
   if(sheetType==="end-confirm"&&!write)closeSheet();
-  if((sheetType==="models"||sheetType==="policy")&&(!write||busy()))closeSheet();
+  if(["models","policy","permission-confirm"].includes(sheetType)&&(!write||busy()))closeSheet();
 }
 async function command(action:AgentAction,row=active()):Promise<void>{
   if(!row||!writable(row))throw new Error("当前会话不可操作");
@@ -96,7 +109,7 @@ function renderRoster(rows:AgentSession[]):void{
 }
 function select(id:string):void{
   if(current)saveDraft(current,draft.value);
-  current=id;try{sessionStorage.setItem(storedSession,id);}catch{/* 使用内存选择。 */}
+  closeSheet();current=id;try{sessionStorage.setItem(storedSession,id);}catch{/* 使用内存选择。 */}
   draft.value=restoreDraft(id);itemNodes.clear();messages.replaceChildren();approvals.replaceChildren();approvals.dataset.key="";showNotice();closeSheet();
   renderRoster(roster);const row=active();if(row)render(row);
   else{byId("agent-title").textContent=id?"正在连接…":"等待分享会话";byId("agent-path").textContent="";byId("agent-state").textContent="";byId("share-access").textContent="";byId("agent-settings").hidden=true;byId("activity-bar").hidden=true;}
@@ -138,20 +151,26 @@ function render(row:AgentSession):void{
   byId("settings-current-state").textContent=labels[row.state]??row.state;
   const options=[...new Set([row.model,...row.models])].filter(Boolean);
   if(model.dataset.key!==options.join("|")){model.replaceChildren(...options.map(value=>new Option(value,value)));model.dataset.key=options.join("|");}model.value=row.model;
-  const present=new Set(row.items.map(i=>i.id));
+  const mainItems=row.items.filter(i=>!i.agentId);
+  const present=new Set(mainItems.map(i=>i.id));
   for(const [id,old] of itemNodes)if(!present.has(id)){old.node.remove();itemNodes.delete(id);}
-  for(const item of row.items){
+  for(const item of mainItems){
     const signature=JSON.stringify(item),old=itemNodes.get(item.id);if(old?.text===signature)continue;
     const node=renderItem(item,row);
     if(old){if(node instanceof HTMLDetailsElement&&old.node instanceof HTMLDetailsElement)node.open=old.node.open;old.node.replaceWith(node);}else messages.append(node);
     itemNodes.set(item.id,{node,text:signature});
   }
   let position=messages.firstElementChild;
-  for(const item of row.items){const node=itemNodes.get(item.id)?.node;if(!node)continue;if(node!==position)messages.insertBefore(node,position);position=node.nextElementSibling;}
-  renderApprovals(row);
+  for(const item of mainItems){const node=itemNodes.get(item.id)?.node;if(!node)continue;if(node!==position)messages.insertBefore(node,position);position=node.nextElementSibling;}
+  renderApprovals(row);renderInteractions(row);
   byId("activity-bar").hidden=false;byId("activity-dot").dataset.state=row.state;
-  byId("activity-text").textContent=row.state==="running"?"正在生成回复…":row.state==="waiting"?"等待审批 · 电脑端也可以处理":row.state==="idle"?"本轮已完成":labels[row.state]??row.state;
+  byId("activity-text").textContent=row.state==="running"?"正在生成回复…":row.state==="waiting"?"等待回答 · 电脑端也可以处理":row.state==="idle"?((row.tasks??[]).some(t=>["running","pending","waiting","retrying"].includes(t.state))?"主 Agent 空闲 · 子任务仍在运行":(row.tasks??[]).some(t=>["unknown","failed","blocked"].includes(t.state))?"主 Agent 空闲 · 请查看子任务状态":"本轮已完成"):labels[row.state]??row.state;
   if(row.state==="idle"||row.state==="exited")queues.delete(row.runtimeId);
+  const activity=byId("agent-activity-detail");activity.hidden=!row.activity?.message;activity.textContent=row.activity?.message??"";
+  activity.dataset.state=row.activity?.kind??row.state;
+  const tasks=row.tasks??[],activeTasks=tasks.filter(t=>["running","pending","waiting","retrying"].includes(t.state));
+  byId("task-bar").hidden=!tasks.length;
+  byId("task-text").textContent="子 Agent："+tasks.length+" 个 · "+activeTasks.length+" 个进行中";
   if(row.error)showNotice(row.error);
   if(sheetType==="approval-detail"&&!row.approvals.some(a=>a.id===sheetRequest))closeSheet();
   syncControls();updateSheet();
@@ -162,28 +181,45 @@ function fillSheet():void{
   const row=active();let html="";
   if(sheetType==="sessions")html=heading("会话")+'<p class="sheet-description">电脑端已接入且获准分享的 Agent 会话。</p><div class="sheet-group-label">工作电脑 · '+roster.length+' 个共享会话</div>'+roster.map(r=>'<button class="sheet-list-button" data-select="'+esc(r.runtimeId)+'"><span><strong>'+esc(r.title)+'</strong><small>'+esc(r.cwd)+'</small><small>'+esc(labels[r.state]??r.state)+' · '+(r.allowControl?"允许操作":"只读")+'</small></span>'+(current===r.runtimeId?icon("check"):"")+'</button>').join("")+'<p class="sheet-footnote">切换只改变当前网页，其他终端继续使用各自的会话。</p>';
   else if(sheetType==="models"&&row)html=heading("切换模型")+'<p class="sheet-description">当前 Agent 提供的模型，选择后用于后续请求。</p><div role="radiogroup" aria-label="可用模型">'+[...new Set([row.model,...row.models])].filter(Boolean).map(value=>'<button class="sheet-list-button" role="radio" aria-checked="'+(row.model===value)+'" data-model="'+esc(value)+'"><span><strong>'+esc(value)+'</strong></span>'+(row.model===value?icon("check"):"")+'</button>').join("")+'</div>';
-  else if(sheetType==="policy"&&row)html=heading("Agent 权限")+'<p class="sheet-description">当前执行范围：'+esc(policyLabel(row))+'。网页是否允许输入由电脑端分享设置决定。</p>'+(row.capabilities.policy?'<button class="sheet-list-button" data-sandbox="read-only"><span><strong>只读</strong><small>工具执行按需审批</small></span></button><button class="sheet-list-button" data-sandbox="workspace-write"><span><strong>工作区写入</strong><small>允许工作区修改，额外权限按需审批</small></span></button>':row.capabilities.plan?'<button id="agent-plan" class="sheet-list-button" data-plan><span><strong>进入 Plan</strong><small>先分析和规划，其他权限模式由原生 Claude 管理</small></span></button>':'<p class="sheet-description">当前 Agent 未提供远程权限切换。</p>');
+  else if(sheetType==="policy"&&row)html=heading("Agent 权限")+'<p class="sheet-description">当前执行范围：'+esc(policyLabel(row))+'。设置来自当前 CLI 的原生权限目录。</p>'+(row.capabilities.policy?(row.permissions?.options??[]).map((p,index)=>'<button class="sheet-list-button" data-permission="'+index+'" '+(!p.allowed?'disabled':"")+'><span><strong>'+esc(p.label)+'</strong><small>'+esc(p.description||p.profile)+' · '+esc(p.approvalPolicy)+' · '+esc(p.reviewer)+(p.allowed?"":" · 被原生策略限制")+'</small></span></button>').join("")||'<p class="sheet-description">原生权限目录不可用，请在电脑端配置。</p>':row.capabilities.plan?'<button class="sheet-list-button" data-plan><span><strong>进入 Plan</strong><small>先分析和规划，其他权限模式由原生 Claude 管理</small></span></button>':'<p class="sheet-description">当前 Agent 未提供远程权限切换。</p>');
+  else if(sheetType==="permission-confirm"&&permissionChoice)html=heading("启用 Full Access？")+'<p class="sheet-description">允许 Codex 在当前账户可访问范围内读写文件和访问网络，并停止按需审批。此操作影响电脑端同一会话的后续执行。</p><div class="confirm-actions"><button class="subtle-button" data-close-sheet>取消</button><button class="danger-button" data-confirm-permission>确认完全访问</button></div>';
+  else if(sheetType==="interaction"&&row){
+    const item=row.interactions?.find(i=>i.id===sheetRequest);
+    if(!item){closeSheet();return;}
+    html=heading(esc(item.title))+interactionHtml(item,writable()&&!pendingApprovals.has(current+":"+item.id));
+  }
+  else if(sheetType==="tasks"&&row)html=heading("子 Agent 与并发任务")+tasksHtml(row);
+  else if(sheetType==="task-detail"&&row){
+    const task=row.tasks?.find(t=>t.id===sheetRequest);
+    html=heading(esc(task?.title||"子 Agent"))+'<p class="sheet-description">'+esc(taskLabel(task?.state??"unknown"))+' · '+esc(task?.model)+'</p>'+(task?.message?'<pre class="detail-code">'+esc(task.message)+'</pre>':"");
+    html+=(row.interactions??[]).filter(i=>i.agentId===sheetRequest).map(i=>'<button class="sheet-list-button" data-interaction-open="'+esc(i.id)+'"><span>'+esc(i.title)+' · 需要回答</span></button>').join("");
+    html+='<div id="task-content"></div>';
+  }
   else if(sheetType==="approval-detail"&&row){const a=row.approvals.find(a=>a.id===sheetRequest);if(!a){closeSheet();return;}html=heading("审批详情")+'<p class="sheet-description">'+esc(a.title)+'</p><pre class="detail-code">'+esc(a.detail)+'</pre><p class="sheet-description">批准仅针对这次操作。任一侧处理后，其余页面同步关闭待办。</p><div class="approval-actions" data-request="'+esc(a.id)+'">'+approvalButtons(a.id,!writable()||!row.capabilities.approvals)+'</div>';}
-  else if(sheetType==="queue")html=heading("已追加的消息")+'<p class="sheet-description">Agent 已接受以下消息，是否排队或立即处理由 Agent 决定。</p>'+(queues.get(current)??[]).map((text,i)=>'<div class="detail-code">'+(i+1)+'. '+esc(text)+'</div>').join("")+'<p class="sheet-footnote">停止本轮不保证清空原生队列。</p>';
+  else if(sheetType==="queue")html=heading(row?.capabilities.queue?"原生输入队列":"已追加的消息")+'<p class="sheet-description">'+(row?.capabilities.queue?"与电脑端共享的真实队列。执行前可以编辑、删除、调整顺序。":"Agent 已接受这些输入，后续安排由 Claude 决定。")+'</p>'+(row?.capabilities.queue?(row.queuedInputs??[]).map((item,index)=>'<section class="queued-item" data-queue-id="'+esc(item.id)+'"><textarea name="queue-'+esc(item.id)+'" aria-label="队列消息" maxlength="32768">'+esc(item.text)+'</textarea><div class="interaction-decisions"><button class="subtle-button" data-queue-operation="update">保存</button><button class="subtle-button" data-queue-operation="delete">删除</button><button class="subtle-button" data-queue-operation="up" '+(!index?"disabled":"")+'>上移</button><button class="subtle-button" data-queue-operation="start">立即执行</button></div></section>').join(""):(queues.get(current)??[]).map((text,i)=>'<div class="detail-code">'+(i+1)+'. '+esc(text)+'</div>').join(""))+'<p class="sheet-footnote">停止当前回合不会自动清空队列。</p>';
   else if(sheetType==="more")html=heading("会话选项")+'<button class="menu-item" data-open="sessions">'+icon("list")+'所有会话</button><button class="menu-item" data-open="info">'+icon("monitor")+'会话信息</button><button class="menu-item" data-open="display">'+icon("settings")+'显示设置</button><button class="menu-item" data-copy-link>'+icon("copy")+'复制会话链接</button><button class="menu-item" data-reconnect>'+icon("refresh")+'重新连接</button>'+(row?.capabilities.end?'<button class="menu-item danger" data-open="end-confirm" '+(!writable()?"disabled":"")+'>'+icon("stop")+'结束 Agent 会话</button>':"");
   else if(sheetType==="end-confirm"&&row)html=heading("结束 Agent 会话？")+'<p class="sheet-description">将结束电脑端的「'+esc(row.title)+'」。网页保留已显示的内容。仅中断当前回复请使用「停止生成」。</p><div class="confirm-actions"><button class="subtle-button" data-close-sheet>取消</button><button class="danger-button" data-end>结束会话</button></div>';
   else if(sheetType==="info")html=heading("会话信息")+(row?'<pre class="detail-code">'+esc(row.title)+'\n'+esc(row.cwd)+'\n'+esc(row.agent)+' · '+esc(row.model)+'\n执行权限：'+esc(policyLabel(row))+'\n网页：'+(row.allowControl?"允许操作":"只读")+'</pre>':'<p class="sheet-description">暂无共享会话。</p>');
   else if(sheetType==="display")html=heading("显示设置")+'<p class="sheet-description">只改变网页消息，不影响电脑终端。</p><div class="menu-item">消息字号<span class="menu-value"><button class="subtle-button" data-font="-1" aria-label="减小字号">−</button> '+displaySize+' px <button class="subtle-button" data-font="1" aria-label="增大字号">+</button></span></div>';
   byId("sheet").innerHTML=html;
+  if(sheetType==="task-detail"&&row)for(const item of row.items.filter(i=>i.agentId===sheetRequest))byId("task-content").append(renderItem(item,row));
+  restoreInteractionDraft();
+
 }
 function updateSheet():void{
   if(!sheetType)return;
-  const row=active(),key=JSON.stringify([sheetType,sheetRequest,roster.map(r=>[r.runtimeId,r.title,r.state,r.allowControl]),row?.approvals,row?.allowControl,row?.model,row?.policy,[...pendingApprovals]]);
+  const row=active(),key=sheetType==="interaction"?JSON.stringify([current,row?.sessionId,sheetRequest,row?.interactions?.find(i=>i.id===sheetRequest),writable(),[...pendingApprovals]]):JSON.stringify([sheetType,sheetRequest,roster.map(r=>[r.runtimeId,r.title,r.state,r.allowControl]),row?.approvals,row?.interactions,row?.tasks,row?.permissions,row?.queuedInputs,sheetType==="task-detail"?row?.items.filter(i=>i.agentId===sheetRequest):undefined,row?.allowControl,row?.model,row?.policy,[...pendingApprovals]]);
   if(sheetKey===key)return;sheetKey=key;
-  const focused=document.activeElement as HTMLElement|null,keyAttr=focused?.dataset.select,decision=focused?.dataset.decision;
-  fillSheet();if(keyAttr)byId("sheet").querySelector<HTMLButtonElement>('[data-select="'+CSS.escape(keyAttr)+'"]')?.focus();
+  const focused=document.activeElement as HTMLInputElement|null,fieldIndex=[...byId("sheet").querySelectorAll("input,textarea,select")].indexOf(focused!),selection=focused&&typeof focused.selectionStart==="number"?[focused.selectionStart,focused.selectionEnd]:null,keyAttr=focused?.dataset.select,decision=focused?.dataset.decision;
+  saveInteractionDraft();fillSheet();if(keyAttr)byId("sheet").querySelector<HTMLButtonElement>('[data-select="'+CSS.escape(keyAttr)+'"]')?.focus();
+  else if(fieldIndex>=0){const field=byId("sheet").querySelectorAll<HTMLInputElement>("input,textarea,select")[fieldIndex];field?.focus();if(field&&selection&&["text","search","url","tel","password"].includes(field.type)||field?.tagName==="TEXTAREA"){try{field?.setSelectionRange(selection?.[0]??0,selection?.[1]??0);}catch{/* 原生类型不提供选区。 */}}}
   else if(decision!==undefined)byId("sheet").querySelector<HTMLButtonElement>('[data-decision="'+decision+'"]')?.focus();
 }
 function openSheet(type:string):void{
   if(!sheetType)beforeSheet=document.activeElement as HTMLElement;
-  sheetType=type;sheetKey="";byId("sheet-layer").dataset.sheet=type;byId("sheet-layer").hidden=false;fillSheet();byId("sheet").querySelector<HTMLButtonElement>("button")?.focus();
+  saveInteractionDraft();sheetType=type;sheetKey="";byId("sheet-layer").dataset.sheet=type;byId("sheet-layer").hidden=false;fillSheet();byId("sheet").querySelector<HTMLButtonElement>("button")?.focus();
 }
-function closeSheet():void{byId("sheet-layer").hidden=true;sheetType="";sheetKey="";if(beforeSheet?.isConnected)beforeSheet.focus();}
+function closeSheet():void{saveInteractionDraft();byId("sheet-layer").hidden=true;sheetType="";sheetKey="";if(beforeSheet?.isConnected)beforeSheet.focus();}
 async function poll():Promise<void>{
   if(polling||!authenticated)return;polling=true;
   try{
@@ -212,11 +248,36 @@ async function authenticate():Promise<void>{
   try{const response=await fetch("/api/auth",{credentials:"same-origin",cache:"no-store"}),status=await response.json() as {authenticated:boolean};if(!response.ok||!status.authenticated){void login.check();return;}login.hide();authenticated=true;byId("agent-layout").hidden=false;await poll();}catch{void login.check();}
 }
 document.addEventListener("click",event=>{
+  const target=(event.target as Element).closest<HTMLButtonElement>("button");
+  if(target?.dataset.interactionOpen){sheetRequest=target.dataset.interactionOpen;openSheet("interaction");return;}
+  if(target?.dataset.task){sheetRequest=target.dataset.task;openSheet("task-detail");return;}
+
   const button=(event.target as Element).closest<HTMLButtonElement>("button");if(!button||button.disabled)return;
   if(button.dataset.open){openSheet(button.dataset.open);return;}
   if(button.hasAttribute("data-close-sheet")){closeSheet();return;}
   if(button.dataset.select){select(button.dataset.select);void poll();return;}
   if(button.dataset.model){const value=button.dataset.model;closeSheet();void command({action:"setModel",model:value}).catch(()=>{});return;}
+  if(button.dataset.permission!==undefined){
+    permissionChoice=active()?.permissions?.options?.[Number(button.dataset.permission)];
+    if(!permissionChoice?.allowed)return;
+    if(permissionChoice.profile===":danger-full-access")openSheet("permission-confirm");else void applyPermission();
+    return;
+  }
+  if(button.hasAttribute("data-confirm-permission")){void applyPermission();return;}
+  const interaction=active()?.interactions?.find(i=>i.id===sheetRequest);
+  if(sheetType==="interaction"&&interaction){
+    if(button.dataset.interactionDecision!==undefined){void answerInteraction(interaction,{decision:interaction.data.decisions?.[Number(button.dataset.interactionDecision)]?.value});return;}
+    if(button.dataset.permissionScope){void answerInteraction(interaction,{scope:button.dataset.permissionScope});return;}
+    if(button.dataset.formAction){void answerInteraction(interaction,{action:button.dataset.formAction});return;}
+    if(button.hasAttribute("data-interaction-cancel")){void answerInteraction(interaction,{cancel:true});return;}
+  }
+  if(button.dataset.queueOperation){
+    const row=active(),element=button.closest<HTMLElement>("[data-queue-id]"),queueId=element?.dataset.queueId,operation=button.dataset.queueOperation;
+    if(!row||!queueId||!writable())return;
+    if(operation==="up"){const ids=(row.queuedInputs??[]).map(i=>i.id),index=ids.indexOf(queueId);if(index>0){[ids[index-1],ids[index]]=[ids[index],ids[index-1]];void command({action:"queue",operation:"reorder",ids}).catch(()=>{});}}
+    else if(["delete","start","update"].includes(operation))void command({action:"queue",operation:operation as "update"|"delete"|"start",queueId,text:element?.querySelector("textarea")?.value}).catch(()=>{});
+    return;
+  }
   if(button.dataset.sandbox){const value=button.dataset.sandbox;closeSheet();void command({action:"setPolicy",sandbox:value,approvalPolicy:"on-request"}).catch(()=>{});return;}
   if(button.hasAttribute("data-plan")){closeSheet();void command({action:"enterPlan"}).catch(()=>{});return;}
   if(button.dataset.approvalDetail){sheetRequest=button.dataset.approvalDetail;openSheet("approval-detail");return;}
@@ -238,6 +299,61 @@ document.addEventListener("click",event=>{
   }
   if(button.dataset.font){displaySize=Math.max(11,Math.min(19,displaySize+Number(button.dataset.font)));messages.style.fontSize=displaySize+"px";fillSheet();}
 });
+function formDraftKey():string{return current+":"+(active()?.sessionId??"")+":"+sheetRequest+":"+sheetType;}
+function saveInteractionDraft():void{
+  if(!["interaction","queue"].includes(sheetType))return;
+  interactionDrafts.set(formDraftKey(),[...byId("sheet").querySelectorAll<HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement>("input,textarea,select")].map(field=>({name:field.name,value:field.value,checked:field instanceof HTMLInputElement&&field.checked,selected:field instanceof HTMLSelectElement?[...field.options].map(o=>o.selected):undefined})));
+}
+function restoreInteractionDraft():void{
+  const saved=interactionDrafts.get(formDraftKey());if(!saved)return;
+  const fields=[...byId("sheet").querySelectorAll<HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement>("input,textarea,select")];
+  for(const [index,value] of saved.entries()){
+    const field=fields[index];if(!field||field.name!==value.name)continue;
+    if(field instanceof HTMLInputElement&&["radio","checkbox"].includes(field.type))field.checked=value.checked;
+    else field.value=value.value;
+    if(field instanceof HTMLSelectElement&&value.selected)[...field.options].forEach((o,i)=>o.selected=Boolean(value.selected?.[i]));
+  }
+}
+async function answerInteraction(item:AgentInteraction,response:unknown):Promise<void>{
+  const row=active();if(!row||!writable())return;
+  const key=current+":"+item.id;if(pendingApprovals.has(key))return;
+  saveInteractionDraft();pendingApprovals.add(key);syncControls();
+  try{await command({action:"respondInteraction",requestId:item.id,response},row);}
+  catch{/* command 显示实际错误，保留答案草稿。 */}
+  finally{pendingApprovals.delete(key);syncControls();updateSheet();}
+}
+async function applyPermission():Promise<void>{
+  const row=active(),choice=permissionChoice;if(!row||!choice)return;
+  closeSheet();await command({action:"setPermissions",profile:choice.profile,approvalPolicy:choice.approvalPolicy,reviewer:choice.reviewer},row).catch(()=>{});
+}
+function renderInteractions(row:AgentSession):void{
+  const dock=byId("interaction-dock"),items=row.interactions??[];
+  dock.hidden=!items.length;
+  const key=JSON.stringify(items.map(i=>[i.id,i.title,i.agentId,i.blocking]));
+  if(dock.dataset.key!==key){
+    dock.dataset.key=key;dock.innerHTML=items.map(item=>'<button class="interaction-prompt" data-interaction-open="'+esc(item.id)+'"><span><strong>'+esc(item.title)+'</strong><small>'+(item.agentId?"子 Agent · ":"")+(item.blocking?"等待回答":"可随时回答")+'</small></span><span>查看</span></button>').join("");
+  }
+  if(sheetType==="interaction"&&!items.some(i=>i.id===sheetRequest)){const key=formDraftKey();closeSheet();interactionDrafts.delete(key);}
+  for(const key of interactionDrafts.keys())if(key.startsWith(row.runtimeId+":")&&!items.some(i=>key===row.runtimeId+":"+row.sessionId+":"+i.id+":interaction")&&!key.endsWith(":queue"))interactionDrafts.delete(key);
+  if(interactionDrafts.size>128)interactionDrafts.delete(interactionDrafts.keys().next().value!);
+  for(const item of items){
+    const identity=row.runtimeId+":"+row.sessionId+":"+item.id;
+    if(!seenInteractions.has(identity)){seenInteractions.add(identity);if(item.blocking&&!sheetType){sheetRequest=item.id;openSheet("interaction");}}
+  }
+}
+document.addEventListener("input",event=>{if(byId("sheet").contains(event.target as Node))saveInteractionDraft();});
+document.addEventListener("change",event=>{if(byId("sheet").contains(event.target as Node))saveInteractionDraft();});
+document.addEventListener("submit",event=>{
+  const form=event.target as HTMLFormElement;if(form.id!=="interaction-form")return;
+  event.preventDefault();const item=active()?.interactions?.find(i=>i.id===form.dataset.interaction);if(!item||!writable())return;
+  try{void answerInteraction(item,readInteraction(item,form));}catch(error){showNotice(error instanceof Error?error.message:String(error));}
+});
+byId("queue-add").onclick=()=>{
+  const row=active(),text=draft.value,id=current;if(!row?.capabilities.queue||!text.trim()||submitting.has(id))return;
+  submitting.add(id);syncControls();
+  void command({action:"queue",operation:"add",text},row).then(()=>{if(current===id&&draft.value===text){draft.value="";saveDraft(id,"");}}).catch(()=>{}).finally(()=>{submitting.delete(id);syncControls();});
+};
+
 draft.oninput=()=>{saveDraft(current,draft.value);syncControls();};
 byId<HTMLFormElement>("agent-composer").onsubmit=event=>{
   event.preventDefault();const row=active();if(!row||!draft.value.trim()||submitting.has(current)||!writable()||!row.capabilities.send)return;
@@ -255,7 +371,7 @@ byId("dismiss-notice").onclick=()=>showNotice();
 byId("sheet-layer").querySelector(".sheet-scrim")!.addEventListener("click",()=>closeSheet());
 document.addEventListener("keydown",event=>{
   if(event.key==="Escape"&&sheetType){event.preventDefault();closeSheet();}
-  if(event.key==="Tab"&&sheetType){const nodes=[...byId("sheet").querySelectorAll<HTMLButtonElement>("button:not(:disabled)")],first=nodes[0],last=nodes[nodes.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}
+  if(event.key==="Tab"&&sheetType){const nodes=[...byId("sheet").querySelectorAll<HTMLButtonElement>("button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href]")],first=nodes[0],last=nodes[nodes.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}
 });
 function viewport():void{document.documentElement.style.setProperty("--viewport-height",(window.visualViewport?.height??window.innerHeight)+"px");}
 window.visualViewport?.addEventListener("resize",viewport);window.addEventListener("resize",viewport);viewport();

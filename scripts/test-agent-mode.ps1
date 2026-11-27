@@ -1,4 +1,4 @@
-param([string]$ChromePath, [string]$Python="python", [switch]$KeepArtifacts)
+param([string]$ChromePath, [string]$Python="python", [switch]$KeepArtifacts, [switch]$FocusInteractions)
 $ErrorActionPreference="Stop"
 if($PSVersionTable.PSVersion.Major -lt 7){throw "请使用 PowerShell 7 (pwsh) 运行隔离验证。"}
 $workspace=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
@@ -62,6 +62,8 @@ wire_api = "responses"
 requires_openai_auth = false
 [analytics]
 enabled = false
+[features]
+send_message_to_user_async = true
 [feedback]
 enabled = false
 [history]
@@ -89,11 +91,18 @@ screen_reader_detection_done = true
     $values.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1";$values.DISABLE_TELEMETRY="1";$values.DISABLE_ERROR_REPORTING="1";$values.DISABLE_AUTOUPDATER="1"
     $values.WEBVIEW2_USER_DATA_FOLDER="$task/webview";$values.APPDATA="$task/appdata";$values.LOCALAPPDATA="$task/localappdata"
     $dev=Start-Isolated "$workspace/src-tauri/target/debug/sTerm-Agent-Dev.exe" @() $values
-    Start-Sleep -Milliseconds 1500
+    $deadline=[DateTime]::UtcNow.AddSeconds(25)
+    while(-not(Test-Path -LiteralPath "$task/appdata/probe-ready")){
+        if($dev.HasExited){throw "隔离应用已退出：$($dev.ExitCode)"}
+        if([DateTime]::UtcNow -gt $deadline){throw "隔离应用未报告驱动就绪。"}
+        Start-Sleep -Milliseconds 100
+    }
     foreach($row in @(@(900,"claude"),@(901,"codex"),@(902,"claude"),@(903,"codex"))){
         Drive @{action="spawn";tab=$row[0];agent=$row[1];cwd="$task/workspace"}|Out-Null
     }
-    & $Python -X utf8 "$PSScriptRoot/test-agent-browser.py" "$task" "$ChromePath"
+    $browserArgs=@("-X","utf8","$PSScriptRoot/test-agent-browser.py",$task,$ChromePath)
+    if($FocusInteractions){$browserArgs+="--focus-interactions"}
+    & $Python @browserArgs
     if($LASTEXITCODE){throw "Chrome Agent 集成验证失败。"}
     $passed=$true
 }finally{
