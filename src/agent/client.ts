@@ -2,17 +2,20 @@ import "./style.css";
 import { RemoteLogin, pairRemoteBrowser } from "../remote/login";
 import { applyChanges } from "./state";
 import { conversationItems, liveTasks } from "./display";
+import { TimelineView } from "./timeline-view";
 import { activeNotices, importantNotice, noticeFingerprint, noticeKey, NoticeTracker } from "./notices";
 import { blockedHtml, blockReview } from "./blocking";
 import { interactionHtml, readInteraction, tasksHtml, taskLabel } from "./interactions";
-import { itemHtml, stateLabel, runningStates, recordDuration, durationLabel, taskTimingHtml } from "./presentation";
-import type { AgentChange, AgentAction, AgentItem, AgentRoster, AgentSession, AgentInteraction, AgentPermission, AgentNotice } from "./types";
+import { runningStates, recordDuration, durationLabel, taskTimingHtml } from "./presentation";
+import type { AgentChange, AgentAction, AgentRoster, AgentSession, AgentInteraction, AgentPermission, AgentNotice } from "./types";
 
 const byId = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 const list=byId("agent-sessions"), messages=byId("agent-messages"), approvals=byId("agent-approvals"), conversation=byId("conversation");
 const draft=byId<HTMLTextAreaElement>("agent-draft"), model=byId<HTMLSelectElement>("agent-model");
 const notice=byId("agent-notice"), connection=byId("agent-connection");
-const snapshots=new Map<string,AgentSession>(), drafts=new Map<string,string>(), itemNodes=new Map<string,{node:HTMLElement;text:string}>();
+const snapshots=new Map<string,AgentSession>(), drafts=new Map<string,string>();
+const timelineView=new TimelineView(messages);
+let taskTimeline:{key:string;node:HTMLElement;view:TimelineView}|undefined;
 const pendingApprovals=new Set<string>(), submitting=new Set<string>(), queues=new Map<string,string[]>();
 const interactionDrafts=new Map<string,{name:string;value:string;checked:boolean;selected?:boolean[]}[]>();
 const collapsedInteractions=new Set<string>(),expandedInteractions=new Set<string>(),interactionErrors=new Map<string,string>(),clockAnchors=new Map<string,{received:number;clock:number}>();
@@ -127,23 +130,10 @@ function select(id:string):void{
   saveCardDraft();cardRequest="";cardKey="";
   const block=byId("blocked-card");block.hidden=true;block.replaceChildren();delete block.dataset.key;delete block.dataset.review;
   closeSheet();current=id;try{sessionStorage.setItem(storedSession,id);}catch{/* 使用内存选择。 */}
-  draft.value=restoreDraft(id);itemNodes.clear();messages.replaceChildren();approvals.replaceChildren();approvals.dataset.key="";showNotice();closeSheet();
+  draft.value=restoreDraft(id);timelineView.clear();taskTimeline=undefined;approvals.replaceChildren();approvals.dataset.key="";showNotice();closeSheet();
   renderRoster(roster);const row=active();if(row)render(row);
   else{byId("agent-title").textContent=id?"正在连接…":"等待分享会话";byId("agent-path").textContent="";byId("agent-state").textContent="";byId("share-access").textContent="";byId("agent-settings").hidden=true;byId("activity-bar").hidden=true;}
   syncControls();
-}
-function renderItem(item:AgentItem,row:AgentSession):HTMLElement{
-  const detail=item.kind==="tool"||item.kind==="thinking"||item.kind==="activity";
-  const card=document.createElement(detail?"details":"article");card.className="agent-item agent-item-"+item.kind;card.dataset.item=item.id;
-  const label=document.createElement(detail?"summary":"div");label.className="agent-item-label";
-  label.textContent=item.kind==="user"?"你":item.kind==="assistant"?(item.title||(row.agent==="claude"?"Claude Code":"Codex")):item.title||(item.kind==="thinking"?"思考摘要":"工具");
-  if(item.kind==="assistant"){const avatar=document.createElement("span");avatar.className="agent-avatar";avatar.textContent=row.agent==="claude"?"C":"›_";label.prepend(avatar);}
-  if(detail){const status=document.createElement("small");status.className="agent-item-status";status.textContent=stateLabel(item.status);label.append(status);}
-  const content=document.createElement("div");content.className="agent-content";
-  content.innerHTML=itemHtml(item,row);
-  for(const link of content.querySelectorAll("a")){link.target="_blank";link.rel="noopener noreferrer";}
-  if(item.kind==="assistant"&&["running","inProgress"].includes(item.status))content.classList.add("message-running");
-  card.append(label,content);return card;
 }
 function approvalButtons(id:string,disabled:boolean):string{
   const pending=pendingApprovals.has(current+":"+id);
@@ -165,17 +155,7 @@ function render(row:AgentSession):void{
   byId("settings-current-state").textContent=labels[row.state]??row.state;
   const options=[...new Set([row.model,...row.models])].filter(Boolean);
   if(model.dataset.key!==options.join("|")){model.replaceChildren(...options.map(value=>new Option(value,value)));model.dataset.key=options.join("|");}model.value=row.model;
-  const mainItems=conversationItems(row).filter(i=>!i.agentId);
-  const present=new Set(mainItems.map(i=>i.id));
-  for(const [id,old] of itemNodes)if(!present.has(id)){old.node.remove();itemNodes.delete(id);}
-  for(const item of mainItems){
-    const signature=JSON.stringify(item),old=itemNodes.get(item.id);if(old?.text===signature)continue;
-    const node=renderItem(item,row);
-    if(old){if(node instanceof HTMLDetailsElement&&old.node instanceof HTMLDetailsElement)node.open=old.node.open;old.node.replaceWith(node);}else messages.append(node);
-    itemNodes.set(item.id,{node,text:signature});
-  }
-  let position=messages.firstElementChild;
-  for(const item of mainItems){const node=itemNodes.get(item.id)?.node;if(!node)continue;if(node!==position)messages.insertBefore(node,position);position=node.nextElementSibling;}
+  timelineView.render(row,conversationItems(row).filter(item=>!item.agentId));
   renderApprovals(row);renderInteractions(row);renderBlocked(row);
   byId("activity-bar").hidden=false;byId("activity-dot").dataset.state=row.state;
   if(row.state==="idle"||row.state==="exited")queues.delete(row.runtimeId);
@@ -255,7 +235,12 @@ function fillSheet():void{
   else if(sheetType==="info")html=heading("会话信息")+(row?'<pre class="detail-code">'+esc(row.title)+'\n'+esc(row.cwd)+'\n'+esc(row.agent)+' · '+esc(row.model)+'\n执行权限：'+esc(policyLabel(row))+'\n网页：'+(row.allowControl?"允许操作":"只读")+'</pre>':'<p class="sheet-description">暂无共享会话。</p>');
   else if(sheetType==="display")html=heading("显示设置")+'<p class="sheet-description">只改变网页消息，不影响电脑终端。</p><div class="menu-item">消息字号<span class="menu-value"><button class="subtle-button" data-font="-1" aria-label="减小字号">−</button> '+displaySize+' px <button class="subtle-button" data-font="1" aria-label="增大字号">+</button></span></div>';
   byId("sheet").innerHTML=html;
-  if(sheetType==="task-detail"&&row){const task=row.tasks?.find(entry=>entry.id===sheetRequest);for(const item of conversationItems(row).filter(entry=>task?.kind==="shell"?entry.id===task.data?.itemId:entry.agentId===sheetRequest))byId("task-content").append(renderItem(item,row));}
+  if(sheetType==="task-detail"&&row){
+    const task=row.tasks?.find(entry=>entry.id===sheetRequest),key=JSON.stringify([row.runtimeId,row.sessionId,sheetRequest]),placeholder=byId("task-content");
+    if(taskTimeline?.key===key)placeholder.replaceWith(taskTimeline.node);
+    else taskTimeline={key,node:placeholder,view:new TimelineView(placeholder)};
+    taskTimeline.view.render(row,conversationItems(row).filter(entry=>task?.kind==="shell"?entry.id===task.data?.itemId:entry.agentId===sheetRequest));
+  }
   restoreInteractionDraft();
   if(row)updateTaskTimers(row);
 
@@ -265,7 +250,8 @@ function updateSheet():void{
   const row=active(),key=sheetType==="interaction"?JSON.stringify([current,row?.sessionId,sheetRequest,row?.interactions?.find(i=>i.id===sheetRequest),writable(),[...pendingApprovals]]):JSON.stringify([sheetType,sheetRequest,roster.map(r=>[r.runtimeId,r.title,r.state,r.allowControl]),row?.approvals,row?.interactions,row?.tasks,row?.notices,row?.permissions,row?.queuedInputs,sheetType==="task-detail"?row?.items.filter(i=>i.agentId===sheetRequest||i.id===row?.tasks.find(task=>task.id===sheetRequest)?.data?.itemId):undefined,row?.allowControl,row?.model,row?.policy,[...pendingApprovals]]);
   if(sheetKey===key)return;sheetKey=key;
   const focused=document.activeElement as HTMLInputElement|null,fieldIndex=[...byId("sheet").querySelectorAll("input,textarea,select")].indexOf(focused!),selection=focused&&typeof focused.selectionStart==="number"?[focused.selectionStart,focused.selectionEnd]:null,keyAttr=focused?.dataset.select,decision=focused?.dataset.decision;
-  saveInteractionDraft();fillSheet();if(keyAttr)byId("sheet").querySelector<HTMLButtonElement>('[data-select="'+CSS.escape(keyAttr)+'"]')?.focus();
+  const sheetScroll=byId("sheet").scrollTop;
+  saveInteractionDraft();fillSheet();byId("sheet").scrollTop=sheetScroll;if(keyAttr)byId("sheet").querySelector<HTMLButtonElement>('[data-select="'+CSS.escape(keyAttr)+'"]')?.focus();
   else if(fieldIndex>=0){const field=byId("sheet").querySelectorAll<HTMLInputElement>("input,textarea,select")[fieldIndex];field?.focus();if(field&&selection&&["text","search","url","tel","password"].includes(field.type)||field?.tagName==="TEXTAREA"){try{field?.setSelectionRange(selection?.[0]??0,selection?.[1]??0);}catch{/* 原生类型不提供选区。 */}}}
   else if(decision!==undefined)byId("sheet").querySelector<HTMLButtonElement>('[data-decision="'+decision+'"]')?.focus();
 }

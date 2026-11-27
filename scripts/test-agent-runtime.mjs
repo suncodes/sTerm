@@ -210,3 +210,59 @@ test("progress strips follow current turns and independent children and clear af
   assert.deepEqual(activeNotices({...row,state:"idle"}).map(notice=>notice.id),["child-hook"]);
   assert.deepEqual(activeNotices({...row,state:"idle",tasks:[{id:"child",state:"completed"}]}),[]);
 });
+
+const timelineBundle=await build({entryPoints:["src/agent/timeline.ts"],bundle:true,write:false,format:"esm",platform:"node"});
+const {timelineItems,timelineEntries,identityItems}=await import("data:text/javascript;base64,"+Buffer.from(timelineBundle.outputFiles[0].contents).toString("base64"));
+const activityBundle=await build({entryPoints:["src/agent/activity.ts"],bundle:true,write:false,format:"esm",platform:"node"});
+const {commandText,commandDescription,commandOutput,processOutcome}=await import("data:text/javascript;base64,"+Buffer.from(activityBundle.outputFiles[0].contents).toString("base64"));
+const shell=(id,status="completed",extra={})=>({id,kind:"tool",text:"echo one\n\nresult",status,turnId:"turn",agentId:"",data:{type:"commandExecution",command:"echo one",exitCode:0},...extra});
+
+test("empty thinking is a live non-content placeholder and disappears after the matching turn ends",()=>{
+  const empty={id:"thinking",kind:"thinking",text:"  ",status:"running",turnId:"turn",agentId:""};
+  const row={...session(),state:"running",turnId:"turn",tasks:[{id:"child",state:"running",turnId:"child-turn"}]};
+  assert.equal(timelineItems([empty],row).length,1);
+  assert.equal(timelineItems([empty],{...row,state:"idle"}).length,0);
+  assert.equal(timelineItems([{...empty,status:"completed"}],row).length,0);
+  assert.equal(timelineItems([{...empty,turnId:"old"}],row).length,0);
+  assert.equal(timelineItems([{...empty,agentId:"child",turnId:"child-turn"}],{...row,state:"idle"}).length,1);
+  assert.equal(timelineItems([{...empty,agentId:"another"}],row).length,0);
+  assert.equal(timelineItems([{...empty,text:"Public summary",status:"completed"}],{...row,state:"idle"}).length,1);
+});
+
+test("only adjacent successful commands from the same agent and turn share a group",()=>{
+  const prose={id:"prose",kind:"assistant",turnId:"turn",text:"Explanation"};
+  const entries=timelineEntries([shell("a"),shell("b"),prose,shell("c"),shell("fail","failed",{data:{command:"false",exitCode:1}}),shell("d"),shell("active","running"),shell("child","completed",{agentId:"child"}),shell("another","completed",{turnId:"another"}),shell("unknown","completed",{turnId:""})]);
+  assert.deepEqual(entries.map(entry=>entry.items.map(item=>item.id)),[["a","b"],["prose"],["c"],["fail"],["d"],["active"],["child"],["another"],["unknown"]]);
+  assert.equal(entries[0].key,"a");
+  assert.deepEqual(timelineEntries([shell("a"),shell("b"),shell("c")])[0].items.map(item=>item.id),["a","b","c"]);
+});
+
+test("assistant identity appears once per reply across thinking and tools and returns on a new source or user message",()=>{
+  const prose=(id,turnId="turn",agentId="")=>({id,kind:"assistant",turnId,agentId});
+  const items=[prose("first"),{id:"thought",kind:"thinking"},shell("command"),prose("continued"),prose("new-turn","next"),prose("child","next","child"),prose("child-continuation","next","child"),{id:"user",kind:"user"},prose("after-user","next","child")];
+  assert.deepEqual([...identityItems(items)],["first","new-turn","child","after-user"]);
+});
+
+test("shell previews use native descriptions and retain full commands and distinct output",()=>{
+  const item=shell("shell","running",{data:{type:"claudeTool",input:{command:"echo one",description:"Check workspace"},exitCode:null}});
+  assert.equal(commandText(item),"echo one");assert.equal(commandDescription(item),"Check workspace");
+  assert.equal(commandOutput(item),"result");assert.equal(processOutcome(item),"running");
+  assert.equal(commandOutput({...item,text:"echo one"}),"");
+  assert.equal(commandOutput({...item,text:"Only output"}),"Only output");
+  assert.equal(commandText({...item,data:{command:["git","status"]}}),"git status");
+  assert.equal(processOutcome({...item,status:"completed",data:{exitCode:1}}),"failed");
+});
+
+test("native empty reasoning completion and snapshots preserve public streamed text without crossing identity",()=>{
+  const thought={id:"thought",kind:"thinking",text:"Public summary",status:"running",turnId:"turn",agentId:"",data:{type:"reasoning",summary:["Public summary"],content:[]}};
+  const original={...session(),items:[thought]},completed={...thought,text:"",status:"completed",data:{type:"reasoning",summary:[],content:[]}};
+  const next=applyChanges(original,[{seq:5,events:[{type:"upsert",item:completed}]}]);
+  assert.equal(next.items[0].text,"Public summary");assert.equal(next.items[0].status,"completed");
+  const refreshed=applyChanges(next,[{seq:6,events:[{type:"items",items:[completed]}]}]);
+  assert.equal(refreshed.items[0].text,"Public summary");
+  assert.equal(original.items[0].status,"running");
+  for(const entry of [{...completed,turnId:"another"},{...completed,agentId:"child"},{...completed,data:{type:"thinking"}}]){
+    const result=applyChanges(original,[{seq:5,events:[{type:"upsert",item:entry}]}]);
+    assert.equal(result.items[0].text,"");
+  }
+});

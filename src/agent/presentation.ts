@@ -1,6 +1,7 @@
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { escapeHtml as escape } from "./html";
+import { commandOutput, commandText } from "./activity";
 import type { AgentItem, AgentSession } from "./types";
 
 export const runningStates=["running","inProgress","pending","waiting","retrying","in_progress"];
@@ -50,7 +51,7 @@ function attachmentHtml(value:unknown):string {
 export function itemHtml(item:AgentItem,row:AgentSession):string {
   const data=item.data??{},input=(data.input??{}) as Record<string,unknown>,native=String(data.type??"");
   let body="";
-  const command=data.command||input.command;
+  const command=commandText(item);
   if(command)body+='<div class="tool-command"><pre>'+escape(command)+'</pre>'+(data.cwd||input.cwd?'<small>目录：'+escape(data.cwd||input.cwd)+'</small>':"")+'</div>';
   if(data.changes)body+=changesHtml(data.changes);
   if(data.diff||data.patch)body+=diffHtml(data.diff||data.patch);
@@ -72,7 +73,7 @@ export function itemHtml(item:AgentItem,row:AgentSession):string {
     }
   }
   if(item.text&&native!=="webSearch"){
-    let text=item.text;if(command&&text.startsWith(String(command)+"\n\n"))text=text.slice(String(command).length+2);
+    const text=command?commandOutput(item):item.text;
     if(text)body+=item.kind==="tool"||item.kind==="user"?'<pre>'+escape(text)+'</pre>':markdown(text);
   }
   const exit=typeof data.exitCode==="number"?'退出码 '+data.exitCode:"",duration=recordDuration(data);

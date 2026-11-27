@@ -279,7 +279,7 @@ impl Hub {
                     s.turn_id = turn_id;
                     if ["idle", "offline", "exited"].contains(&s.state.as_str()) { s.approvals.clear(); }
                 }
-                Event::Items { items } => { s.items.retain(|item| !item.agent_id.is_empty()); s.items.extend(items); }
+                Event::Items { items } => { let items=super::presentation::preserve_reasoning_history(&s.items,items); s.items.retain(|item| !item.agent_id.is_empty()); s.items.extend(items); }
                 Event::Upsert { item } => {
                     if let Some(old) = s.items.iter_mut().find(|old| old.id == item.id) { *old = super::presentation::merge_item(old,item); } else { s.items.push(item); }
                 }
@@ -293,7 +293,7 @@ impl Hub {
                     if let Some(policy) = policy { s.policy = policy; }
                     s.settings_revision += 1;
                 }
-                Event::TaskItems { agent_id, items } => { s.items.retain(|item| item.agent_id!=agent_id); s.items.extend(items); }
+                Event::TaskItems { agent_id, items } => { let items=super::presentation::preserve_reasoning_history(&s.items,items); s.items.retain(|item| item.agent_id!=agent_id); s.items.extend(items); }
                 Event::Permissions { value } => { if s.permissions!=value { s.permissions=value; s.settings_revision+=1; } }
                 Event::Queue { items } => { s.queued_inputs=items.into_iter().take(100).collect(); }
                 Event::Activity { value } => { s.activity=value; }

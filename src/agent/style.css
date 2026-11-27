@@ -48,7 +48,6 @@ body{font:12px "Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;background:v
 .messages{width:var(--content-column);padding:22px 0 26px;margin:0 auto;line-height:1.8;font-size:13px}
 .day-label{text-align:center;color:#9393a1;font-size:10px;margin-bottom:22px;letter-spacing:.04em}
 .message{margin-bottom:24px;overflow-wrap:anywhere}.message-heading{display:flex;align-items:center;gap:7px;margin-bottom:9px;font-size:11px;color:#cfcfd7;font-weight:500}
-.agent-avatar{width:19px;height:19px;display:inline-flex;align-items:center;justify-content:center;background:#3b3b43;border:1px solid #555560;border-radius:4px;font:500 10px Consolas,monospace;color:#dadbe3}
 .message-heading small{font-size:10px;font-weight:400;color:#9e9eab}.message-text{color:#dddde3;line-height:1.9}.message-text p+p{margin-top:10px}
 .message-text strong{font-weight:600;color:#ebebf0}.message-text code,.inline-code{background:#38383f;color:#d4dfef;border:1px solid #45454e;border-radius:3px;padding:1px 4px;font:11px Consolas,monospace;overflow-wrap:anywhere}
 .user-message{margin-left:14%;padding:12px 15px;background:#34343b;border:1px solid #494951;border-radius:5px}
@@ -131,16 +130,41 @@ body{font:12px "Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;background:v
 .agent-content code{font-family:Consolas,"Microsoft YaHei UI",monospace}
 .agent-content :not(pre)>code{font-size:11px;border:1px solid #45454e;background:#38383f;padding:1px 4px;border-radius:3px}
 .agent-content table{display:block;max-width:100%;overflow:auto;border-collapse:collapse;font-size:11px}.agent-content td,.agent-content th{border:1px solid #50505a;padding:6px 9px}
-.agent-item-tool,.agent-item-thinking{border:1px solid #464650;border-radius:4px;background:#2c2c31;font-size:11px;overflow:hidden;margin:12px 0 20px}
-.agent-item-tool summary,.agent-item-thinking summary{padding:10px 12px;min-height:42px;cursor:pointer;margin:0;font-weight:400;list-style:none}
-.agent-item-tool summary::before,.agent-item-thinking summary::before{content:"›";color:#9999a7;margin-right:3px}
-.agent-item-tool[open] summary::before,.agent-item-thinking[open] summary::before{transform:rotate(90deg)}
-.agent-item-tool .agent-content,.agent-item-thinking .agent-content{border-top:1px solid #414149;padding:10px 12px}
-.agent-item-tool pre{border:0;padding:0;background:none;color:#bbbcca}
-.agent-item-thinking{background:transparent;border-color:transparent;color:#aaaab8}
-.agent-item-thinking .agent-content{font-size:11px;color:#aaaab8}
-.agent-item-thinking summary{min-height:32px;padding:3px 0}
-.agent-item-status{margin-left:auto;color:#98b49e;white-space:nowrap;font-size:10px}
+/* 过程条目以次级文字衬托正文，展开后才显示执行细节。 */
+:root{--process-fg:#b6b6c4;--process-line:#4b4b55}
+.agent-item-assistant>.agent-item-label{font-size:11px;font-weight:400;color:var(--process-fg);margin-bottom:7px}
+.agent-item.agent-item-assistant{margin-bottom:16px}.agent-item-assistant[data-continuation=true]{margin-top:12px}
+.agent-item.process-row,.command-group.process-row{border:0;border-radius:0;background:transparent;margin:6px 0;font-size:12px;color:var(--process-fg)}
+.process-row+.agent-item-assistant{margin-top:18px}
+.process-row>.agent-item-label{display:flex;align-items:center;gap:8px;min-height:36px;padding:5px 0;margin:0;font-size:12px;font-weight:400;line-height:1.7;color:var(--process-fg);list-style:none}
+.process-row>summary{cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:rgba(200,200,215,.08)}
+.process-row>summary::-webkit-details-marker{display:none}
+.process-row>summary:hover{color:var(--fg)}
+.process-row>summary:focus-visible{outline:2px solid #9abbe7;outline-offset:2px;border-radius:3px}
+.process-title{flex-shrink:0;max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.process-preview{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:inherit}
+.process-command-preview{font-family:Consolas,"Microsoft YaHei UI",monospace;font-size:11px}
+.process-marker{display:inline-block;width:6px;height:6px;flex:0 0 6px;border-radius:50%;background:#888897;margin:0 4px}
+.process-row[data-status=running]>.agent-item-label>.process-marker{width:12px;height:12px;flex-basis:12px;margin:0 1px;border:1.5px solid #777785;border-top-color:#d0d0dc;background:none;animation:process-spin 1.2s linear infinite}
+.process-chevron{margin-left:2px;flex-shrink:0;color:var(--process-fg);transition:transform .15s;font-size:17px;line-height:1}
+.process-row[open]>.agent-item-label>.process-chevron{transform:rotate(90deg)}
+.agent-item-status{margin-left:auto;flex-shrink:0;font-size:11px;color:var(--process-fg);white-space:nowrap}
+.agent-item-status:empty{display:none}
+.process-row[data-status=failed]>.agent-item-label,.process-row[data-status=failed]>.agent-item-label>.agent-item-status{color:#e5adb5}
+.process-row[data-status=failed]>.agent-item-label>.process-marker{background:#e5adb5}
+.process-row[data-status=attention]>.agent-item-label>.agent-item-status{color:#dbc298}
+.process-row>.agent-content{margin:3px 0 10px 13px;padding:5px 0 5px 14px;border:0;border-left:1px solid var(--process-line);max-height:45vh;overflow:auto;font-size:12px;color:var(--process-fg);scrollbar-width:thin;overscroll-behavior:contain}
+.process-row .tool-command{border:0;border-radius:0;background:none;margin:0 0 9px;padding:0;overflow:visible}
+.process-row .tool-command pre,.process-row .agent-content>pre{border:0;background:none;padding:0;color:var(--process-fg);font-size:12px}
+.process-row .tool-command small{margin-top:5px;color:var(--process-fg)}
+.command-group-body{margin-left:13px;padding-left:14px;border-left:1px solid var(--process-line)}
+.command-group-body>.process-row{margin:0}
+.command-group-body .process-title{font-size:11px}
+.command-group .process-chevron{margin-left:auto}
+.process-row .tool-metrics{color:var(--process-fg)}
+@keyframes process-spin{to{transform:rotate(360deg)}}
+@media(max-width:759px){.process-row>.agent-item-label{min-height:44px}}
+@media(prefers-reduced-motion:reduce){.process-row[data-status=running]>.agent-item-label>.process-marker{animation:none}.process-chevron{transition:none}}
 .approval-dock:empty{display:none}.approval-card+.approval-card{margin-top:9px}.approval-target{max-height:92px;overflow:auto;white-space:pre-wrap}
 .message-running::after{content:"";display:inline-block;width:5px;height:14px;background:#bcc4ce;animation:pulse 1s infinite;margin-left:3px}
 .sheet-layer[data-sheet=sessions]{align-items:stretch;justify-content:flex-end}.sheet-layer[data-sheet=sessions] .sheet{width:min(326px,89%);max-height:100%;height:100%;border:0;border-left:1px solid #55555f;border-radius:0}
@@ -161,7 +185,7 @@ body{font:12px "Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;background:v
 @media(max-width:520px){
 .client-header{padding:7px 3px 7px 12px;gap:3px}.client-brand{gap:7px}.client-brand small{font-size:9px}.header-actions{gap:5px}.mode-switch a{padding:0 8px;min-height:28px;font-size:10px}.connection{font-size:9px}.header-actions>.touch-button{width:34px}
 .session-count{display:none}.session-list-button{padding:0 12px}.settings-current-state{display:none}.setting-button{font-size:11px;gap:5px;padding:0 7px}.setting-divider{margin:0 3px}.agent-settings{padding:0 7px}.setting-caption{font-size:10px}.session-meta{padding:0 13px;gap:8px}
-:root{--content-gutter:15px}.messages{padding:19px 0 20px}.agent-item{margin-bottom:21px}.agent-item-user{margin-left:9%;padding:11px 13px}.agent-item-tool summary{min-height:44px}
+:root{--content-gutter:15px}.messages{padding:19px 0 20px}.agent-item{margin-bottom:21px}.agent-item-user{margin-left:9%;padding:11px 13px}.process-row>summary{min-height:44px}
 .activity-bar{padding:0 var(--content-inset);min-height:39px}.stop-button{height:38px}.composer{padding:10px var(--content-inset) max(10px,env(safe-area-inset-bottom))}
 #agent-composer{gap:8px}#agent-draft{font-size:16px;min-height:61px;padding-top:8px;line-height:1.6}
 .draft-footer{padding:0 9px 4px;gap:3px;font-size:9px;min-height:26px}.key-hint{display:none}

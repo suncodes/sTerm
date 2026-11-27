@@ -1,4 +1,4 @@
-import type { AgentChange, AgentSession } from "./types";
+import type { AgentChange, AgentItem, AgentSession } from "./types";
 
 export function applyChanges(session: AgentSession, changes: AgentChange[]): AgentSession | null {
   const row = { ...session, items: [...session.items], approvals: [...session.approvals],
@@ -21,11 +21,11 @@ export function applyChanges(session: AgentSession, changes: AgentChange[]): Age
           if (["idle", "offline", "exited"].includes(row.state)) row.approvals = [];
           if(["offline","exited"].includes(row.state))row.tasks=row.tasks.map(task=>["running","inProgress","in_progress","waiting","pending","retrying"].includes(task.state)?{...task,state:"unknown",data:{...task.data,statusReason:"连接已断开，等待原生状态确认"}}:task);
           break;
-        case "items": row.items = [...row.items.filter(item => item.agentId), ...event.items]; break;
-        case "taskItems": row.items = [...row.items.filter(item => item.agentId !== event.agentId), ...event.items]; break;
+        case "items": row.items = [...row.items.filter(item => item.agentId), ...event.items.map(item=>preserveReasoning(row.items.find(previous=>previous.id===item.id&&(previous.agentId||"")===(item.agentId||"")),item))]; break;
+        case "taskItems": row.items = [...row.items.filter(item => item.agentId !== event.agentId), ...event.items.map(item=>preserveReasoning(row.items.find(previous=>previous.id===item.id&&(previous.agentId||"")===(item.agentId||"")),item))]; break;
         case "upsert": {
           const index = row.items.findIndex(item => item.id === event.item.id);
-          if (index < 0) row.items.push(event.item); else row.items[index] = {...event.item,data:mergeData(row.items[index].data,event.item.data)};
+          if (index < 0) row.items.push(event.item); else {const item=preserveReasoning(row.items[index],event.item);row.items[index] = {...item,data:mergeData(row.items[index].data,item.data)};}
           break;
         }
         case "delta": row.items = row.items.map(item => item.id === event.id ? { ...item, text: item.text + event.delta } : item); break;
@@ -77,4 +77,12 @@ export function applyChanges(session: AgentSession, changes: AgentChange[]): Age
 
 function mergeData(previous:Record<string,unknown>|undefined,next:Record<string,unknown>|undefined):Record<string,unknown>{
   const value={...previous};for(const [key,entry] of Object.entries(next??{})){if(entry==null&&(key.endsWith("AtMs")||key==="durationMs"))continue;value[key]=entry;}return value;
+}
+
+// 与宿主的终态合并一致；只保留同一身份已收到的公开摘要。
+function preserveReasoning(old:AgentItem|undefined,next:AgentItem):AgentItem{
+  if(old&&old.id===next.id&&(old.agentId||"")===(next.agentId||"")&&old.turnId===next.turnId&&old.kind==="thinking"&&next.kind==="thinking"&&old.data?.type==="reasoning"&&next.data?.type==="reasoning"&&old.text?.trim()&&!next.text?.trim()){
+    return {...next,text:old.text,data:{...next.data,summary:old.data.summary,content:old.data.content}};
+  }
+  return next;
 }

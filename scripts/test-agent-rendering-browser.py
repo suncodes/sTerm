@@ -106,6 +106,83 @@ try:
  browser.until('document.querySelectorAll("#agent-messages>.agent-item").length===4')
  assert browser.evaluate('[...document.querySelectorAll("#agent-messages>.agent-item")].map(i=>i.dataset.item)')==order
  print("PASS Chrome live/completed/reloaded block order and native duration",flush=True)
+ saved_row=copy.deepcopy(row)
+ def step(ident,kind,text="",status="completed",turn="visual-turn",agent="",**data):
+  value=item(ident,kind,text,**data);value.update(status=status,turnId=turn,agentId=agent,title="");return value
+ row.update(state="running",turnId="visual-turn")
+ row["items"]=[
+  step("prose-1","assistant","I will inspect the workspace."),
+  step("empty-thought","thinking",status="running",type="reasoning",summary=[],content=[]),
+  step("live-command","tool","echo one\n\n"+"output line\n"*90,status="running",type="commandExecution",command="echo one",description="Check workspace"),
+  step("prose-2","assistant","The first check has finished."),
+  step("group-one","tool","echo first\n\nfirst output",type="commandExecution",command="echo first",exitCode=0,durationMs=400),
+  step("group-two","tool","echo second\n\nsecond output",type="commandExecution",command="echo second",exitCode=0,durationMs=500),
+  step("failed-command","tool","false\n\nNative failure",type="commandExecution",command="false",exitCode=1),
+  step("prose-next","assistant","A separate reply.",turn="next-turn"),
+ ];row["seq"]+=1
+ browser.until('Boolean(document.querySelector("[data-item=empty-thought]")) && Boolean(document.querySelector(".command-group"))')
+ assert browser.evaluate('document.querySelector("[data-item=empty-thought]").tagName==="ARTICLE" && !document.querySelector("[data-item=empty-thought] summary") && document.querySelector("[data-item=empty-thought] .process-title").textContent==="正在思考"')
+ assert browser.evaluate('document.querySelectorAll("#agent-messages>.agent-item-assistant>.agent-item-label:not([hidden])").length===2 && document.querySelector("[data-item=prose-2]>.agent-item-label").hidden && !document.querySelector(".agent-avatar")')
+ assert browser.evaluate('!document.querySelector(".command-group").open && document.querySelector(".command-group .process-title").textContent==="执行了 2 条命令" && !document.querySelector("[data-item=failed-command]").closest(".command-group") && document.querySelector("[data-item=failed-command]").dataset.status==="failed"')
+ assert browser.evaluate('document.querySelector("[data-item=live-command] summary").textContent.includes("Check workspace") && getComputedStyle(document.querySelector("[data-item=live-command]")).borderTopWidth==="0px" && getComputedStyle(document.querySelector("[data-item=live-command]")).backgroundColor==="rgba(0, 0, 0, 0)"')
+ browser.evaluate('const s=document.querySelector("[data-item=live-command]>summary");s.click();s.focus();document.querySelector("[data-item=live-command] .agent-content").scrollTop=160')
+ row["items"][2]["text"]+="new streamed output";row["seq"]+=1
+ browser.until('document.querySelector("[data-item=live-command] .agent-content").textContent.includes("new streamed output")')
+ assert browser.evaluate('document.querySelector("[data-item=live-command]").open && document.querySelector("[data-item=live-command] .agent-content").scrollTop>=150 && document.activeElement===document.querySelector("[data-item=live-command]>summary")')
+ row["items"][1]["text"]="Checking the workspace\n\nPublic summary body.";row["seq"]+=1
+ browser.until('document.querySelector("[data-item=empty-thought]").tagName==="DETAILS"')
+ browser.evaluate('document.querySelector("[data-item=empty-thought]>summary").click()')
+ row["items"][1]["text"]+="\nMore public summary.";row["items"][1]["status"]="completed"
+ row["items"][2]["status"]="completed";row["items"][2]["data"]["exitCode"]=0;row["seq"]+=1
+ browser.until('document.querySelector("[data-item=empty-thought] .process-title").textContent==="推理摘要"')
+ assert browser.evaluate('document.querySelector("[data-item=empty-thought]").open && document.querySelector("[data-item=empty-thought] .agent-content").textContent.includes("More public summary.") && document.querySelector("[data-item=live-command]").open && !document.querySelector("[data-item=live-command]>summary").textContent.includes("已完成")')
+ browser.evaluate('document.querySelector(".command-group>summary").click();document.querySelector("[data-item=group-one]>summary").click()')
+ row["items"].insert(6,step("group-three","tool","echo third\n\nthird output",status="running",type="commandExecution",command="echo third"));row["seq"]+=1
+ browser.until('Boolean(document.querySelector("[data-item=group-three]>summary"))')
+ browser.evaluate('(()=>{const s=document.querySelector("[data-item=group-three]>summary");s.click();s.focus()})()')
+ row["items"][6]["status"]="completed";row["items"][6]["data"]["exitCode"]=0;row["seq"]+=1
+ browser.until('document.querySelector(".command-group>.agent-item-label").textContent.includes("3 条命令")')
+ assert browser.evaluate('document.querySelector(".command-group").open && document.querySelector("[data-item=group-one]").open && [...document.querySelectorAll(".command-group-body>[data-item]")].map(n=>n.dataset.item).join(",")==="group-one,group-two,group-three"')
+ assert browser.evaluate('document.querySelector("[data-item=group-three]").open && document.activeElement===document.querySelector("[data-item=group-three]>summary")')
+ assert browser.evaluate('(()=>{const rgb=n=>getComputedStyle(n).color.match(/[0-9.]+/g).slice(0,3).map(Number),lum=a=>a.map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4}).reduce((s,v,i)=>s+v*[.2126,.7152,.0722][i],0),fg=lum(rgb(document.querySelector(".process-preview"))),bg=lum(getComputedStyle(document.querySelector("#conversation")).backgroundColor.match(/[0-9.]+/g).slice(0,3).map(Number));return (Math.max(fg,bg)+.05)/(Math.min(fg,bg)+.05)>=4.5})()')
+ row["items"].insert(2,step("ended-empty","thinking",type="reasoning",summary=[],content=[]))
+ row["items"].insert(3,step("stale-empty","thinking",status="running",turn="old-turn",type="reasoning"));row["seq"]+=1
+ browser.until('Boolean(document.querySelector("[data-item=group-three]"))')
+ time.sleep(.4)
+ assert browser.evaluate('!document.querySelector("[data-item=ended-empty]") && !document.querySelector("[data-item=stale-empty]")')
+ browser.call("Emulation.setDeviceMetricsOverride",{"width":390,"height":844,"deviceScaleFactor":1,"mobile":True})
+ tap(".command-group>summary")
+ browser.until('!document.querySelector(".command-group").open')
+ tap(".command-group>summary")
+ browser.until('document.querySelector(".command-group").open')
+ assert browser.evaluate('document.querySelector(".command-group>summary").getBoundingClientRect().height>=44 && document.documentElement.scrollWidth<=390')
+ browser.evaluate('for(const n of document.querySelectorAll("#agent-messages details"))n.open=false;document.querySelector("#conversation").scrollTop=0')
+ shot("light-process-mobile.png")
+ row["agent"]="claude"
+ for value in row["items"]:
+  if value["id"]=="live-command":value["data"]={"type":"claudeTool","tool":"Bash","input":{"command":"echo one","description":"Check workspace"}}
+ row["seq"]+=1
+ browser.until('document.querySelector("[data-item=empty-thought] .process-title").textContent==="思考"')
+ assert browser.evaluate('document.querySelector("[data-item=prose-1]>.agent-item-label").textContent==="Claude Code" && document.querySelector("[data-item=prose-2]>.agent-item-label").hidden && document.querySelector("[data-item=live-command]>summary").textContent.includes("Check workspace")')
+ row["tasks"]=[{"id":"child","kind":"agent","state":"completed","title":"Review worker","turnId":"child-turn"}]
+ row["items"].extend([step("child-first","assistant","Child opening",turn="child-turn",agent="child"),step("child-command","tool","echo child\n\nchild output",turn="child-turn",agent="child",command="echo child"),step("child-last","assistant","Child result",turn="child-turn",agent="child")]);row["seq"]+=1
+ browser.evaluate('document.querySelector("[data-open=more]").click()')
+ browser.until('Boolean(document.querySelector("#sheet [data-open=tasks]"))')
+ browser.evaluate('document.querySelector("#sheet [data-open=tasks]").click()')
+ browser.until('Boolean(document.querySelector("[data-task=child]"))')
+ browser.evaluate('document.querySelector("[data-task=child]").click()')
+ browser.until('Boolean(document.querySelector("#task-content [data-item=child-last]"))')
+ assert browser.evaluate('document.querySelector("#task-content [data-item=child-first]>.agent-item-label").textContent.includes("Review worker") && document.querySelector("#task-content [data-item=child-last]>.agent-item-label").hidden')
+ browser.evaluate('document.querySelector("#task-content [data-item=child-command]>summary").click()')
+ row["items"][-2]["text"]+="\nUpdated child output";row["seq"]+=1
+ browser.until('document.querySelector("#task-content [data-item=child-command] .agent-content").textContent.includes("Updated child output")')
+ assert browser.evaluate('document.querySelector("#task-content [data-item=child-command]").open')
+ browser.evaluate('document.querySelector("[data-close-sheet]").click()')
+ row.clear();row.update(saved_row);row["seq"]+=20
+ browser.call("Page.reload")
+ browser.until('document.querySelectorAll("#agent-messages>.agent-item").length===4')
+ assert browser.evaluate('document.querySelector("[data-item=after]>.agent-item-label").hidden')
+ print("PASS Chrome light process rows, empty thinking, stable streamed reading, ordered command groups, one identity per reply and mobile/child sources",flush=True)
  browser.evaluate('document.querySelector("#agent-draft").focus()')
  set_interaction(interaction("question",questions=[{"id":"q","title":"Pick a target","other":False,"options":[{"label":"A"},{"label":"B"}]}]))
  browser.until('Boolean(document.querySelector("#interaction-card input"))')
