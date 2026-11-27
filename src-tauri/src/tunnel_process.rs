@@ -44,6 +44,40 @@ impl Job {
         Ok(Self(handle))
     }
 
+    /// 只托管当前终端 Shell 直接创建且路径匹配的 Agent，避免结束其他实例。
+    pub(crate) fn assign_native_child(&self, pid:u32, parent:u32, expected:&Path)->Result<(),String>{
+        let process=own_handle(unsafe{OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION|PROCESS_TERMINATE|0x0100,0,pid)})
+            .ok_or_else(||process_error("无法读取 Agent 进程"))?;
+        let image=image_path(&process).ok_or("无法核对 Agent 进程路径")?;
+        if fs::canonicalize(&image).ok()!=fs::canonicalize(expected).ok(){return Err("Agent 进程路径不匹配".into())}
+        let snapshot=own_handle(unsafe{CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS,0)}).ok_or_else(||process_error("无法核对 Agent 父进程"))?;
+        let mut entry=PROCESSENTRY32W::default();entry.dwSize=size_of::<PROCESSENTRY32W>() as u32;
+        let mut next=unsafe{Process32FirstW(snapshot.as_raw_handle(),&mut entry)};
+        let mut parents=std::collections::HashMap::new();
+        while next!=0{
+            parents.insert(entry.th32ProcessID,entry.th32ParentProcessID);
+            next=unsafe{Process32NextW(snapshot.as_raw_handle(),&mut entry)};
+        }
+        let actual_parent=parents.get(&pid).copied().ok_or("Agent 已退出")?;
+        let mut matched=actual_parent==parent;
+        // CMD 的临时包装使用一层已知 PowerShell 执行脚本。
+        if !matched&&parents.get(&actual_parent)==Some(&parent){
+            if let Some(middle)=own_handle(unsafe{OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,0,actual_parent)}){
+                if let Some(path)=image_path(&middle){
+                    let wrapper=crate::pty::resolve_shell("pwsh").program;
+                    matched=fs::canonicalize(path).ok()==fs::canonicalize(wrapper).ok();
+                }
+            }
+        }
+        if !matched{return Err("Agent 不是当前 Shell 的子进程".into())}
+        if unsafe{AssignProcessToJobObject(self.0.as_raw_handle(),process.as_raw_handle())}==0{return Err(process_error("无法托管当前 Agent"))}
+        Ok(())
+    }
+    pub(crate) fn terminate(&self)->Result<(),String>{
+        if unsafe{TerminateJobObject(self.0.as_raw_handle(),0)}==0{return Err(process_error("停止 Agent 失败"))}
+        Ok(())
+    }
+
     pub(crate) fn assign(&self, child: &Child) -> Result<(), String> {
         if unsafe { AssignProcessToJobObject(self.0.as_raw_handle(), child.as_raw_handle()) } == 0 {
             return Err(process_error("无法托管公网组件，已取消启动"));

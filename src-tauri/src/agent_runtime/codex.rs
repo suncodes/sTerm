@@ -162,8 +162,24 @@ impl Client {
                     if is_approval { tokio::spawn(dispatch); } else { dispatch.await; }
                 }
             }
+            // TUI 退出或标签关闭后，释放共用后端中的对应回合与订阅。
+            // 保留网页历史不代表 Agent 仍存活，不能让后台继续执行。
+            if client.release_thread(&thread).await.is_err() {
+                crate::diagnostics::record(&format!("agent_runtime codex_cleanup_failed runtime={runtime}"));
+            }
             client.bindings.lock().unwrap().remove(&thread);
+            client.approvals.lock().unwrap().retain(|id, _| !id.starts_with(&format!("{thread}:")));
         });
+        Ok(())
+    }
+
+    async fn release_thread(&self, thread: &str) -> Result<(), String> {
+        let turns = self.call("thread/turns/list", json!({"threadId":thread,"limit":1,"sortDirection":"desc"})).await?;
+        for turn in turns["data"].as_array().into_iter().flatten().filter(|turn| turn["status"] == "inProgress") {
+            let id = turn["id"].as_str().ok_or("Codex 活跃回合没有标识")?;
+            self.call("turn/interrupt", json!({"threadId":thread,"turnId":id})).await?;
+        }
+        self.call("thread/unsubscribe", json!({"threadId":thread})).await?;
         Ok(())
     }
 
@@ -173,7 +189,7 @@ impl Client {
         if let Some(model) = response["model"].as_str() { if !models.iter().any(|item| item == model) { models.push(model.into()); } }
         self.hub.apply(runtime, thread, vec![Event::Ready { session_id: thread.into(),
             model: response["model"].as_str().unwrap_or_default().into(), models,
-            capabilities: Capabilities { send: true, stop: true, models: true, plan: false, policy: true, approvals: true } },
+            capabilities: Capabilities { send: true, stop: true, models: true, plan: false, policy: true, approvals: true, end: false } },
             Event::Settings { model: None, policy: Some(format!("{} · {}", response["sandbox"]["type"].as_str().unwrap_or_default(), response["approvalPolicy"].as_str().unwrap_or_default())) }])?;
         self.refresh(runtime, thread).await;
         if let Ok(turns) = self.call("thread/turns/list", json!({"threadId":thread,"limit":1,"sortDirection":"desc"})).await {

@@ -33,11 +33,13 @@ pub trait RemoteHost: Send + Sync {
     fn resize(&self, id: u32, generation: u32, cols: u16, rows: u16) -> Result<(), String>;
     fn asset(&self, path: &str) -> Option<(Vec<u8>, String)>;
     fn agent_hub(&self) -> Option<crate::agent_runtime::hub::SharedHub> { None }
+    fn end_agent(&self,_runtime:&str)->Result<(),String>{Err("当前主机不支持结束 Agent".into())}
 }
 
 struct DesktopHost(AppHandle);
 
 impl RemoteHost for DesktopHost {
+    fn end_agent(&self,runtime:&str)->Result<(),String>{self.0.state::<crate::agent_runtime::State>().shell.end(runtime)}
     fn agent_hub(&self) -> Option<crate::agent_runtime::hub::SharedHub> { Some(crate::agent_runtime::web::hub(&self.0)) }
     fn snapshot(&self, id: u32, generation: u32, request: &str) -> Result<(), String> {
         self.0.emit("remote-snapshot-request", json!({"id": id, "generation": generation, "request": request}))
@@ -177,6 +179,14 @@ impl RemoteHub {
         self.agent_hub().ok_or("Agent 服务不可用")?.submit(command, true)
     }
 
+    pub(crate) fn end_agent(&self,headers:&HeaderMap,runtime:&str,generation:u32,session_id:&str)->Result<(),String>{
+        let _input=self.input.lock().unwrap();
+        if !self.agent_authenticated(headers){return Err("浏览器授权已撤销".into())}
+        let agent=self.agent_hub().ok_or("Agent 服务不可用")?;
+        let row=agent.snapshot(runtime,true)?;
+        if row.generation!=generation||row.session_id!=session_id||!row.allow_control||!row.capabilities.end||row.state=="exited"{return Err("会话不可结束或已替换".into())}
+        self.host.end_agent(runtime)
+    }
     pub(crate) fn agent_hub(&self) -> Option<crate::agent_runtime::hub::SharedHub> {
         self.host.agent_hub()
     }
@@ -187,7 +197,7 @@ impl RemoteHub {
 
     pub fn share(&self, mut session: SharedSession) -> Result<(), String> {
         if self.host.agent_hub().is_some_and(|hub| hub.has_tab(session.id, session.generation)) {
-            return Err("此终端已接入 Agent 模式，请在 Agent 面板分享".into());
+            return Err("此终端已接入 Agent 模式，请在远程访问设置中分享".into());
         }
         if session.cols < 2 || session.rows == 0 || session.title.len() > 512 {
             return Err("无效的会话信息".into());

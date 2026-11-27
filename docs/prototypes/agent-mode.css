@@ -1,0 +1,39 @@
+/* 仅用于原型评审框架；实际界面使用独立 surface iframe。 */
+html,body{height:100%;overflow:auto}
+body{margin:0;background:#202023;font-family:"Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;font-size:12px;color:var(--fg-2)}
+[hidden]{display:none!important}button,select{font:inherit;color:inherit}button{cursor:pointer}button:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid #9abbe7;outline-offset:2px}
+.review-header{min-height:76px;display:flex;align-items:center;gap:24px;padding:15px 28px;border-bottom:1px solid #38383e}
+.review-identity{display:flex;align-items:center;gap:12px;min-width:225px}
+.review-mark{font:600 25px Consolas,monospace;color:#c4c4cc}
+.review-identity strong{font-size:15px;font-weight:600;color:#e0e0e4}.review-identity strong span{font-weight:400;margin-left:8px;color:#c4c4c8}
+.review-identity small{display:block;margin-top:5px;font-size:10px;color:#aaaab5}
+.view-tabs{display:flex;gap:3px;border:1px solid #414147;padding:3px;border-radius:5px;background:#29292d}
+.view-tabs button{border:0;background:transparent;padding:7px 14px;border-radius:3px;color:#aaaab5;white-space:nowrap}
+.view-tabs button:hover{background:#363639;color:#e0e0e4}.view-tabs button[aria-pressed=true]{background:#46464d;color:#f0f0f4}
+.design-link{margin-left:auto;color:#aaaab5;font-size:11px;text-decoration:none;white-space:nowrap}.design-link:hover{color:#bdd5f7}
+.scenario-bar{display:flex;align-items:center;gap:14px;padding:14px 28px 10px}.scenario-label{font-size:11px;color:#b9b9c3;white-space:nowrap}
+.scenario-options{flex:1;display:flex;gap:6px;overflow:auto;scrollbar-width:none;min-width:0}.scenario-options::-webkit-scrollbar{display:none}
+.scenario-options button{border:1px solid transparent;border-radius:4px;background:transparent;color:#aaaab5;padding:6px 10px;white-space:nowrap}
+.scenario-options button:hover{background:#323237;color:#e0e0e4}.scenario-options button[aria-pressed=true]{border-color:#637089;color:#dce7f6;background:#303845}
+.reset-demo{margin-left:0;border:1px solid #414147;background:#2a2a2e;border-radius:4px;padding:6px 10px;white-space:nowrap;font-size:11px}.reset-demo:hover{background:#43434a}
+.review-context{display:flex;gap:20px;justify-content:space-between;align-items:start;padding:0 28px;color:#a9a9b4;font-size:11px;line-height:1.7}
+.review-context p{margin:0;max-width:860px}.review-context>span{color:#888894;white-space:nowrap}
+.review-stage{display:grid;grid-template-columns:minmax(0,1fr) var(--phone-width,390px);gap:26px;max-width:1650px;padding:22px 28px 16px;margin:0 auto;align-items:start}
+.preview{min-width:0}.preview-caption{display:flex;align-items:center;gap:12px;min-height:32px;margin-bottom:6px;font-size:11px;color:#9999a6}
+.preview-caption strong{font-size:12px;font-weight:500;color:#dedee4}.preview-caption>span{margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.preview-caption label{margin-left:auto;display:flex;align-items:center;gap:7px}.preview-caption select{border:1px solid #45454d;background:#29292d;font-size:10px;border-radius:3px;padding:2px}
+.browser-frame,.phone-frame,.desktop-frame{overflow:hidden;border:1px solid #50505a;border-radius:6px;background:#2a2a2e;box-shadow:0 12px 35px #0002}
+.browser-frame{height:806px;display:flex;flex-direction:column}.browser-address{height:33px;flex-shrink:0;display:flex;align-items:center;justify-content:center;position:relative;background:#303034;border-bottom:1px solid #414147;color:#a4a4af;font:10px "Segoe UI",sans-serif}
+.browser-dots{position:absolute;left:12px;display:flex;gap:5px}.browser-dots i{width:5px;height:5px;background:#666670;border-radius:50%}
+iframe{width:100%;height:100%;min-height:0;border:0;display:block;flex:1}.phone-frame{width:100%;height:806px}.desktop-frame{height:790px}
+.desktop-preview{display:none}.preview-caption>button{margin-left:auto;border:1px solid #50505a;background:#303034;border-radius:4px;padding:6px 9px;color:#c7daF3;font-size:11px}
+body[data-view=mobile] .browser-preview,body[data-view=mobile] .desktop-preview{display:none}
+body[data-view=mobile] .review-stage{display:flex;justify-content:center}.phone-preview{width:var(--phone-width,390px)}
+body[data-view=browser] .phone-preview,body[data-view=browser] .desktop-preview{display:none}body[data-view=browser] .review-stage{display:block;max-width:1400px}
+body[data-view=desktop] .phone-preview,body[data-view=desktop] .browser-preview{display:none}body[data-view=desktop] .desktop-preview{display:block}body[data-view=desktop] .review-stage{display:block;max-width:1400px}
+.review-footer{max-width:1650px;display:flex;justify-content:space-between;gap:20px;margin:auto;padding:0 28px 26px;font-size:10px;color:#9696a3;line-height:1.8}
+#interaction-feedback{color:#b4c3b5}
+@media(min-width:1600px){.browser-frame,.phone-frame{height:850px}}
+@media(max-width:1050px){.review-header{gap:12px;padding:12px 18px}.review-identity{min-width:190px}.view-tabs button{padding:7px 10px}.review-stage{padding:18px;gap:18px}.review-context{padding:0 18px}.review-context>span{display:none}.scenario-bar{padding-left:18px;padding-right:18px}.review-footer{padding-left:18px;padding-right:18px}.review-footer>span:last-child{display:none}}
+@media(max-width:720px){.review-header{flex-wrap:wrap;padding:12px;gap:12px}.review-identity{min-width:0;flex:1}.review-identity strong{font-size:13px}.review-mark{font-size:22px}.view-tabs{order:3;width:100%;justify-content:space-between}.view-tabs button{flex:1;padding:8px}.scenario-bar{padding:12px 10px 8px;gap:6px}.scenario-label{display:none}.scenario-options{flex:1}.scenario-options button{padding:8px;font-size:11px}.review-context{padding:0 12px;font-size:10px}.review-stage{padding:14px 0}.phone-preview{max-width:100%;width:min(100%,var(--phone-width,390px))}.phone-frame{height:calc(100svh - 230px);min-height:560px;border-radius:0;border-left:0;border-right:0}.preview-caption{padding:0 12px}.review-footer{padding:0 12px 16px}.browser-preview,.desktop-preview{width:100%}.browser-frame,.desktop-frame{height:720px;border-radius:0}.browser-preview .preview-caption>span{display:none}body[data-view=compare] .review-stage{grid-template-columns:1fr}body[data-view=compare] .browser-preview{display:none}body[data-view=compare] .phone-preview{justify-self:center}.design-link{font-size:10px}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}

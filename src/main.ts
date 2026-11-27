@@ -1,7 +1,7 @@
 import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 import "./agent/desktop.css";
-import { setupAgentLauncher } from "./agent/desktop";
+import { setupAgentAccess } from "./agent/desktop";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -96,7 +96,7 @@ async function main(): Promise<void> {
 
   remote = new RemoteController(tabs);
   await remote.init();
-  setupAgentLauncher(tabs, remote);
+  setupAgentAccess(tabs, remote);
   await notifications.init(tabs).catch(() => showToast("飞书通知初始化失败"));
 
   void overlay.init().then(() => overlay.sync(tabs.sessions, tabs.active?.id)).catch((error) => {
@@ -195,6 +195,7 @@ async function main(): Promise<void> {
     }
     tabs.active?.refit();
   };
+  window.addEventListener("sterm-open-settings",event=>openSettings({onTermFont:setTermFont,shellId:shell.id,remote:remote!,page:(event as CustomEvent<{page:string}>).detail.page}));
   document.getElementById("btn-settings")!.onclick = () =>
     openSettings({ onTermFont: setTermFont, shellId: shell.id, remote: remote! });
   applyLayoutFonts(loadFontSettings());

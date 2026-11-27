@@ -20,7 +20,7 @@ fn data(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn executable(name: &str) -> Result<PathBuf, String> {
+pub(super) fn executable(name: &str) -> Result<PathBuf, String> {
     // 测试只影响 debug 实例，不修改安装版的路径或真实配置。
     if cfg!(debug_assertions) {
         if let Some(path) = std::env::var_os(format!("STERM_DEV_{}_EXE", name.to_uppercase())) {
@@ -78,7 +78,7 @@ async fn server(app: &AppHandle, state: &State, cwd: &str) -> Result<(String, St
     Ok((server.endpoint.clone(), server.token_env.clone(), server.token.clone(), server.client.clone()))
 }
 
-pub async fn prepare(app: &AppHandle, state: &State, tab: u32, generation: u32, agent: &str, cwd: &str, resume: Option<String>) -> Result<Launch, String> {
+pub async fn prepare_arguments(app: &AppHandle, state: &State, tab: u32, generation: u32, agent: &str, cwd: &str, resume: Option<String>, settings: serde_json::Value, native_args: Vec<String>) -> Result<Launch, String> {
     if resume.as_ref().is_some_and(|id| id.len() > 100 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')) { return Err("无效的历史会话 ID".into()); }
     let program = executable(agent)?;
     let binary = program.clone();
@@ -104,11 +104,13 @@ pub async fn prepare(app: &AppHandle, state: &State, tab: u32, generation: u32, 
             fs::write(directory.join("hooks/register.js"), format!("const CONFIG = {config};\n{}", MOD.replace("__STERM_TOKEN_ENV__", &env_name))).map_err(|e| e.to_string())?;
             let mut args = vec!["--plugin-dir".into(), directory.to_string_lossy().into_owned()];
             if let Some(resume) = resume { args.extend(["--resume".into(), resume]); }
+            args.extend(native_args);
             Ok(Launch { runtime_id: runtime.clone(), program: program.to_string_lossy().into_owned(), args, env: vec![(env_name, token)] })
         } else {
             let is_new = resume.is_none();
             let (endpoint, env_name, bearer, client) = server(app, state, cwd).await?;
-            let mut request = json!({"cwd":cwd});
+            let mut request=settings;
+            request["cwd"]=json!(cwd);
             let response = if let Some(resume) = resume {
                 request["threadId"] = json!(resume); client.call("thread/resume", request).await?
             } else {
@@ -119,7 +121,7 @@ pub async fn prepare(app: &AppHandle, state: &State, tab: u32, generation: u32, 
             if is_new { client.call("thread/name/set", json!({"threadId":thread,"name":"sTerm Agent"})).await?; }
             client.bind(&runtime, &thread, &response).await?;
             Ok(Launch { runtime_id: runtime.clone(), program: program.to_string_lossy().into_owned(),
-                args: vec!["resume".into(), thread, "--remote".into(), endpoint, "--remote-auth-token-env".into(), env_name.clone()],
+                args: {let mut args=vec!["resume".into(), thread, "--remote".into(), endpoint, "--remote-auth-token-env".into(), env_name.clone()];args.extend(native_args);args},
                 env: vec![(env_name, bearer)] })
         }
     }.await;

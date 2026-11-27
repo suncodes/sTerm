@@ -58,7 +58,7 @@ try:
  profile=ROOT/("chrome-"+uuid.uuid4().hex[:8]);profile.mkdir()
  log=(ROOT/"chrome.log").open("wb")
  env={**os.environ,"TEMP":str(ROOT/"temp"),"TMP":str(ROOT/"temp")}
- CHROME=subprocess.Popen([CHROME_EXE,"--headless=new","--remote-debugging-port=0","--user-data-dir="+str(profile),"--disk-cache-dir="+str(ROOT/"chrome-cache"),"--crash-dumps-dir="+str(ROOT/"chrome-crash"),"--disable-background-networking","--disable-component-update","--disable-breakpad","--no-first-run","--no-default-browser-check",pair],env=env,stdout=log,stderr=log,creationflags=subprocess.CREATE_NO_WINDOW)
+ CHROME=subprocess.Popen([CHROME_EXE,"--headless=new","--disable-extensions","--remote-debugging-port=0","--user-data-dir="+str(profile),"--disk-cache-dir="+str(ROOT/"chrome-cache"),"--crash-dumps-dir="+str(ROOT/"chrome-crash"),"--disable-background-networking","--disable-component-update","--disable-breakpad","--no-first-run","--no-default-browser-check",pair],env=env,stdout=log,stderr=log,creationflags=subprocess.CREATE_NO_WINDOW)
  for _ in range(100):
   active=profile/"DevToolsActivePort"
   if active.exists():break
@@ -99,7 +99,7 @@ try:
  prompt("LONG_WEB")
  browser.until('!document.querySelector("#agent-stop").disabled')
  browser.until('document.querySelector("#agent-state").textContent==="运行中"')
- browser.until('document.querySelector(".agent-item-assistant:last-child").textContent.includes("STERM_CLAUDE_A") && !document.querySelector(".agent-item-assistant:last-child").textContent.includes("STERM_CLAUDE_B")')
+ browser.until('document.querySelector(".agent-item-assistant:last-child")?.textContent.includes("STERM_CLAUDE_A") && !document.querySelector(".agent-item-assistant:last-child")?.textContent.includes("STERM_CLAUDE_B")')
  time.sleep(.7)
  browser.evaluate('document.querySelector("#agent-stop").click();true')
  browser.until('document.querySelector("#agent-state").textContent==="空闲"')
@@ -151,12 +151,12 @@ try:
  requests=json.loads((ROOT/"mock-requests.json").read_text(encoding="utf8"))
  assert any(r.get("model")=="gpt-6.2-sol" for r in requests)
  print("PASS Codex model switch reaches actual model request",flush=True)
- browser.until('!document.querySelector("[data-sandbox=workspace-write]").disabled')
- browser.evaluate('document.querySelector("[data-sandbox=workspace-write]").click();true')
- browser.until('document.querySelector("#agent-policy").textContent.includes("workspaceWrite")')
- browser.until('!document.querySelector("[data-sandbox=read-only]").disabled')
- browser.evaluate('document.querySelector("[data-sandbox=read-only]").click();true')
- browser.until('document.querySelector("#agent-policy").textContent.includes("readOnly")')
+ browser.until('!document.querySelector("#policy-button").disabled')
+ browser.evaluate('document.querySelector("#policy-button").click();document.querySelector("[data-sandbox=workspace-write]").click();true')
+ browser.until('document.querySelector("#agent-policy").textContent.includes("工作区写入")')
+ browser.until('!document.querySelector("#policy-button").disabled')
+ browser.evaluate('document.querySelector("#policy-button").click();document.querySelector("[data-sandbox=read-only]").click();true')
+ browser.until('document.querySelector("#agent-policy").textContent.includes("只读")')
  print("PASS Codex native sandbox policy roundtrip",flush=True)
  # 两个独立网页视图回复同一审批；已分发的原生请求只允许一个确认路径。
  target=browser.call("Target.createTarget",{"url":endpoint+"/agent.html"})["targetId"]
@@ -184,7 +184,7 @@ try:
  urllib.request.urlopen(json.loads((ROOT/"mock-endpoint.json").read_text())["endpoint"]+"/hold/reset").read()
  prompt("LONG_CODEX")
  browser.until('!document.querySelector("#agent-stop").disabled')
- browser.until('document.querySelector(".agent-item-assistant:last-child").textContent.includes("STERM_CODEX_A") && !document.querySelector(".agent-item-assistant:last-child").textContent.includes("STERM_CODEX_B")')
+ browser.until('document.querySelector(".agent-item-assistant:last-child")?.textContent.includes("STERM_CODEX_A") && !document.querySelector(".agent-item-assistant:last-child")?.textContent.includes("STERM_CODEX_B")')
  browser.evaluate('document.querySelector("#agent-stop").click();true')
  browser.until('document.querySelector("#agent-state").textContent==="空闲"')
  urllib.request.urlopen(json.loads((ROOT/"mock-endpoint.json").read_text())["endpoint"]+"/hold/release").read()
@@ -225,6 +225,105 @@ try:
   (ROOT/f"agent-{width}.png").write_bytes(base64.b64decode(shot["data"]))
  assert drive({"action":"size","tab":901})==size_before
  print("PASS 360/390/768/1440 responsive layouts without PTY resize",flush=True)
+ # 响应式会话抽屉与真实模型选择面板。
+ browser.call("Emulation.setDeviceMetricsOverride",{"width":390,"height":850,"deviceScaleFactor":1,"mobile":True})
+ browser.evaluate('document.querySelector("[data-open=sessions]").click();true')
+ browser.until('!document.querySelector("#sheet-layer").hidden')
+ assert browser.evaluate('getComputedStyle(document.querySelector("#sheet-layer")).justifyContent==="flex-end"')
+ browser.evaluate('document.querySelector("[data-close-sheet]").click();document.querySelector("#model-button").click();true')
+ browser.until('Boolean(document.querySelector("[data-model]"))')
+ shot=browser.call("Page.captureScreenshot",{"format":"png"})
+ (ROOT/"agent-model-panel.png").write_bytes(base64.b64decode(shot["data"]))
+ browser.evaluate('document.querySelector("[data-close-sheet]").click();true')
+ print("PASS mobile session drawer and actual model choices",flush=True)
+ # 审批详情固定呈现，两个客户端状态共用真实 request。
+ prompt("APPROVAL_DETAILS_CODEX")
+ browser.until('Boolean(document.querySelector(".agent-approval"))')
+ browser.evaluate('document.querySelector("[data-approval-detail]").click();true')
+ browser.until('!document.querySelector("#sheet-layer").hidden')
+ shot=browser.call("Page.captureScreenshot",{"format":"png"})
+ (ROOT/"agent-approval-panel.png").write_bytes(base64.b64decode(shot["data"]))
+ browser.evaluate('document.querySelector("#sheet [data-decision=\\"false\\"]").click();true')
+ browser.until('document.querySelector("#sheet-layer").hidden')
+ settled(codex["runtimeId"])
+ print("PASS approval details use actual pending request",flush=True)
+ # 结束一个已托管 Agent，必须保留其 Shell、网页历史及其他 Agent。
+ ended=next(r for r in rows if r["tabId"]==903)
+ browser.evaluate("document.querySelector('[data-runtime="+json.dumps(ended["runtimeId"])+"]').click();true")
+ browser.until('!document.querySelector("#agent-draft").disabled')
+ urllib.request.urlopen(json.loads((ROOT/"mock-endpoint.json").read_text())["endpoint"]+"/hold/reset").read()
+ prompt("LONG_END_CODEX")
+ browser.until('document.querySelector("#agent-state").textContent==="运行中"')
+ browser.until('document.querySelector(".agent-item-assistant:last-child")?.textContent.includes("STERM_CODEX_A") && !document.querySelector(".agent-item-assistant:last-child")?.textContent.includes("STERM_CODEX_B")')
+ before_items=snapshot(ended["runtimeId"])["items"]
+ assert snapshot(ended["runtimeId"])["capabilities"]["end"],"Agent process not registered as owned"
+ browser.evaluate('document.querySelector("[data-open=more]").click();document.querySelector("[data-open=end-confirm]").click();true')
+ browser.until('Boolean(document.querySelector("[data-end]"))')
+ time.sleep(1)
+ assert browser.evaluate('!document.querySelector("#sheet-layer").hidden && Boolean(document.querySelector("[data-end]"))'),"运行中结束会话确认框被轮询关闭"
+ browser.evaluate('document.querySelector("[data-end]").click();true')
+ browser.until('document.querySelector("#agent-state").textContent==="已结束"')
+ assert snapshot(ended["runtimeId"])["items"]==before_items
+ deadline=time.monotonic()+4
+ while True:
+  turns=drive({"action":"codex_turns","runtimeId":ended["runtimeId"]})["data"]
+  if not any(turn["status"]=="inProgress" for turn in turns):break
+  if time.monotonic()>deadline:raise AssertionError("结束会话后 Codex 后台回合仍在运行: "+json.dumps(turns))
+  time.sleep(.2)
+ urllib.request.urlopen(json.loads((ROOT/"mock-endpoint.json").read_text())["endpoint"]+"/hold/release").read()
+ assert drive({"action":"size","tab":903})==[130,38],"Shell ended with Agent"
+ native(903,"Write-Output STERM_SHELL_STILL_ALIVE")
+ assert snapshot(codex["runtimeId"])["state"]=="idle","Another Agent was terminated"
+ print("PASS ending a running Agent stops its backend turn and retains transcript, Shell and other sessions",flush=True)
+ # 同一 Shell 再次启动时替换旧记录；关闭运行中标签也要停止共享后台。
+ native(903,"codex")
+ deadline=time.monotonic()+25
+ while True:
+  restarted=next((r for r in drive({"action":"list"})["sessions"] if r["tabId"]==903 and r["runtimeId"]!=ended["runtimeId"]),None)
+  if restarted and snapshot(restarted["runtimeId"])["sessionId"]:break
+  if time.monotonic()>deadline:raise AssertionError("同一 Shell 重启 Agent 超时")
+  time.sleep(.2)
+ drive({"action":"share","runtimeId":restarted["runtimeId"],"shared":True,"control":True})
+ browser.until("Boolean(document.querySelector('[data-runtime="+json.dumps(restarted["runtimeId"])+"]'))")
+ assert not browser.evaluate("Boolean(document.querySelector('[data-runtime="+json.dumps(ended["runtimeId"])+"]'))")
+ browser.evaluate("document.querySelector('[data-runtime="+json.dumps(restarted["runtimeId"])+"]').click();true")
+ browser.until('!document.querySelector("#agent-draft").disabled')
+ urllib.request.urlopen(json.loads((ROOT/"mock-endpoint.json").read_text())["endpoint"]+"/hold/reset").read()
+ prompt("LONG_CLOSE_CODEX")
+ browser.until('document.querySelector("#agent-state").textContent==="运行中"')
+ browser.until('document.querySelector(".agent-item-assistant:last-child")?.textContent.includes("STERM_CODEX_A") && !document.querySelector(".agent-item-assistant:last-child")?.textContent.includes("STERM_CODEX_B")')
+ thread=snapshot(restarted["runtimeId"])["sessionId"]
+ drive({"action":"close","tab":903})
+ deadline=time.monotonic()+4
+ while True:
+  turns=drive({"action":"codex_turns","sessionId":thread})["data"]
+  if not any(turn["status"]=="inProgress" for turn in turns):break
+  if time.monotonic()>deadline:raise AssertionError("关闭标签后 Codex 后台回合仍在运行")
+  time.sleep(.2)
+ browser.until("!document.querySelector('[data-runtime="+json.dumps(restarted["runtimeId"])+"]')")
+ urllib.request.urlopen(json.loads((ROOT/"mock-endpoint.json").read_text())["endpoint"]+"/hold/release").read()
+ assert snapshot(codex["runtimeId"])["state"]=="idle"
+ print("PASS restarting Agent replaces old history; closing running tab interrupts only its backend turn",flush=True)
+ # 兼容 Windows PowerShell / CMD，结束命令不替换原 Shell。
+ for tab_id,shell_kind in [(904,"powershell"),(905,"cmd")]:
+  extra=drive({"action":"spawn","tab":tab_id,"agent":"codex","shell":shell_kind,"cwd":str(ROOT/"workspace")})
+  row_id=extra["runtimeId"]
+  drive({"action":"share","runtimeId":row_id,"shared":True,"control":True})
+  deadline=time.monotonic()+25
+  while not snapshot(row_id)["sessionId"] and time.monotonic()<deadline:time.sleep(.2)
+  browser.until("Boolean(document.querySelector('[data-runtime="+json.dumps(row_id)+"]'))")
+  browser.evaluate("document.querySelector('[data-runtime="+json.dumps(row_id)+"]').click();true")
+  browser.until('!document.querySelector("#agent-draft").disabled')
+  prompt("SHELL_"+shell_kind)
+  browser.until('document.querySelector("#agent-draft").value===""')
+  settled(row_id)
+  assert any(item["text"]=="SHELL_"+shell_kind for item in snapshot(row_id)["items"])
+  browser.evaluate('document.querySelector("[data-open=more]").click();document.querySelector("[data-open=end-confirm]").click();document.querySelector("[data-end]").click();true')
+  browser.until('document.querySelector("#agent-state").textContent==="已结束"')
+  assert drive({"action":"size","tab":tab_id})==[130,38]
+  print("PASS "+shell_kind+" direct launch, web input, end and Shell retained",flush=True)
+ browser.evaluate("document.querySelector('[data-runtime="+json.dumps(codex["runtimeId"])+"]').click();true")
+ browser.until('!document.querySelector("#agent-draft").disabled')
  drive({"action":"revoke"})
  browser.until('!document.querySelector("#login-panel").hidden')
  assert snapshot(codex["runtimeId"])["state"]=="idle"

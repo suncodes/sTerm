@@ -37,8 +37,17 @@ async fn receipt(State(hub): State<Arc<RemoteHub>>, headers: HeaderMap, Path((ru
     Ok(Json(json!(agent.receipt(&runtime, &command, true).map_err(|_| StatusCode::NOT_FOUND)?)))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase")]
+struct EndRequest { generation:u32, session_id:String }
+async fn end(State(hub):State<Arc<RemoteHub>>,headers:HeaderMap,Path(id):Path<String>,Json(request):Json<EndRequest>)->Result<Json<Value>,(StatusCode,Json<Value>)>{
+    check(&hub,&headers).map_err(|status|(status,Json(json!({"message":"请重新登录"}))))?;
+    hub.end_agent(&headers,&id,request.generation,&request.session_id)
+        .map_err(|message|(StatusCode::CONFLICT,Json(json!({"message":message}))))?;
+    Ok(Json(json!({"ok":true})))
+}
 pub fn routes() -> Router<Arc<RemoteHub>> {
-    Router::new().route("/api/agents", get(list).post(list)).route("/api/agents/command", post(command))
+    Router::new().route("/api/agents/{id}/end",post(end)).route("/api/agents", get(list).post(list)).route("/api/agents/command", post(command))
         .route("/api/agents/{id}", get(snapshot).post(snapshot)).route("/api/agents/{runtime}/commands/{command}", get(receipt).post(receipt))
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024))
 }

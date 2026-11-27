@@ -166,6 +166,7 @@ impl Hub {
     pub fn apply(&self, id: &str, session_id: &str, events: Vec<Event>) -> Result<(), String> {
         let mut inner = self.inner.lock().unwrap();
         let record = inner.records.get_mut(id).ok_or("会话已结束")?;
+        if record.session.state=="exited"{return Err("Agent 已结束，拒绝迟到事件".into())}
         if events.iter().any(|e| matches!(e, Event::Ready { session_id: id, .. } if id != session_id)) { return Err("会话身份不匹配".into()); }
         let changed_session = events.iter().any(|e| matches!(e, Event::Ready { session_id: new, .. } if new != &record.session.session_id));
         if !changed_session && !record.session.session_id.is_empty() && record.session.session_id != session_id { return Err("旧会话事件".into()); }
@@ -176,7 +177,9 @@ impl Hub {
             match event {
                 Event::Ready { session_id, model, models, capabilities } => {
                     if s.session_id != session_id { s.items.clear(); s.approvals.clear(); s.turn_id.clear(); }
+                    let can_end=s.capabilities.end;
                     s.session_id = session_id; s.model = model; s.models = models; s.capabilities = capabilities;
+                    s.capabilities.end=can_end;
                     s.state = "idle".into(); s.error = None; s.settings_revision += 1;
                 }
                 Event::State { state, turn_id } => {
@@ -294,6 +297,22 @@ impl Hub {
         Ok(json!({"snapshot":record.session}))
     }
 
+    pub fn set_end_capability(&self,id:&str){
+        let mut inner=self.inner.lock().unwrap();
+        if let Some(record)=inner.records.get_mut(id){
+            record.session.capabilities.end=true;record.changes.clear();record.session.seq+=1;inner.revision+=1;
+        }
+    }
+    pub fn finish(&self,id:&str){
+        let mut inner=self.inner.lock().unwrap();
+        if let Some(record)=inner.records.get_mut(id){
+            Self::cancel_pending(record,"Agent 已结束");
+            record.session.state="exited".into();record.session.turn_id.clear();record.session.approvals.clear();
+            record.changes.clear();record.session.seq+=1;inner.revision+=1;
+        }
+        drop(inner);self.changed.notify_waiters();
+    }
+
     pub fn retire(&self, tab: u32, generation: u32) {
         let mut inner = self.inner.lock().unwrap();
         inner.records.retain(|_, r| r.session.tab_id != tab || r.session.generation != generation);
@@ -321,7 +340,7 @@ impl Hub {
         self.inner.lock().unwrap().records.values().any(|r| r.session.tab_id == tab && r.session.generation == generation)
     }
 
-    pub fn is_alive(&self, id: &str) -> bool { self.inner.lock().unwrap().records.contains_key(id) }
+    pub fn is_alive(&self, id: &str) -> bool { self.inner.lock().unwrap().records.get(id).is_some_and(|record| record.session.state != "exited") }
 
     pub fn expire_connections(&self) {
         let ids: Vec<_> = self.inner.lock().unwrap().records.iter()
@@ -336,7 +355,18 @@ pub type SharedHub = Arc<Hub>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn ready() -> (Hub, String, String) {
+    #[test]
+    fn owned_agent_exit_preserves_content_and_rejects_stale_controls() {
+        let (hub,id,_)=ready();
+        hub.share(&id,2,true,true).unwrap();hub.set_end_capability(&id);
+        hub.apply(&id,"native",vec![Event::Items{items:vec![Item{id:"user".into(),kind:"user".into(),text:"keep history".into(),title:String::new(),status:"completed".into(),turn_id:String::new()}]}]).unwrap();
+        let cursor=hub.snapshot(&id,false).unwrap().seq;
+        hub.finish(&id);
+        let row=hub.snapshot(&id,true).unwrap();
+        assert_eq!(row.state,"exited");assert_eq!(row.items[0].text,"keep history");assert!(!hub.is_alive(&id));
+        assert!(hub.has_tab(1,2));assert!(hub.submit(command(&id),true).is_err());
+        assert_eq!(hub.update(&id,Some(cursor)).unwrap()["snapshot"]["state"],"exited");
+    }    fn ready() -> (Hub, String, String) {
         let hub = Hub::default(); let (id, token) = hub.register("claude", 1, 2, "D:/probe".into());
         hub.apply(&id, "native", vec![Event::Ready { session_id: "native".into(), model: "a".into(), models: vec!["a".into()], capabilities: Capabilities { send: true, stop: true, approvals: true, ..Default::default() } }]).unwrap();
         (hub, id, token)

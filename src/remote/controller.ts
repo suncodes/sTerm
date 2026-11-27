@@ -5,6 +5,7 @@ import type { TerminalSession } from "../terminal/session";
 import { OverlayKeepAlive } from "../overlay/keepalive";
 import { readRemoteDefaults, resolveRemotePermission, type RemoteDefaults, type RemotePolicy } from "./permissions";
 import type { RemoteStatus, SharedSession } from "./types";
+import type { AgentSession } from "../agent/types";
 
 const DEFAULTS_KEY = "sterm-remote-defaults";
 
@@ -18,6 +19,8 @@ export class RemoteController {
   private pending = false;
   private syncing: Promise<void> | undefined;
   private stopping = false;
+  agents:AgentSession[]=[];
+  private readonly agentSynced=new Map<string,string>();
   private revision = 0;
 
   constructor(private readonly tabs: TabManager) {}
@@ -37,6 +40,18 @@ export class RemoteController {
   }
 
   get sessions(): readonly TerminalSession[] { return this.tabs.sessions; }
+  async updateAgents(rows:AgentSession[]):Promise<void>{
+    const changed=JSON.stringify(this.agents)!==JSON.stringify(rows);
+    this.agents=rows;
+    this.keepAlive.setEnabled(Boolean(this.status)||rows.some(row=>row.state!=="exited"));
+    for(const session of this.sessions){
+      const row=rows.find(row=>row.tabId===session.id&&row.generation===session.remoteInfo().generation);
+      session.setAgentRuntime(row?.runtimeId??null);
+    }
+    for(const id of this.agentSynced.keys())if(!rows.some(row=>row.runtimeId===id))this.agentSynced.delete(id);
+    await this.sync();
+    if(changed)this.notify();
+  }
 
   policy(session: TerminalSession): RemotePolicy {
     return this.policies.get(session) ?? "inherit";
@@ -57,7 +72,7 @@ export class RemoteController {
     const status = await invoke<RemoteStatus | null>("remote_status");
     if (revision !== this.revision) return;
     this.status = status;
-    this.keepAlive.setEnabled(Boolean(this.status));
+    this.keepAlive.setEnabled(Boolean(this.status)||this.agents.some(row=>row.state!=="exited"));
     this.notify();
   }
 
@@ -90,7 +105,17 @@ export class RemoteController {
       this.pending = false;
       for (const session of this.policies.keys()) if (!this.tabs.sessions.includes(session)) this.policies.delete(session);
       for (const session of this.synced.keys()) if (!this.tabs.sessions.includes(session)) this.synced.delete(session);
-      if (!this.status || this.stopping) continue;
+      if(this.stopping)continue;
+      for(const row of this.agents){
+        const session=this.tabs.byId(row.tabId);
+        if(!session||session.remoteInfo().generation!==row.generation)continue;
+        const permission=resolveRemotePermission(this.policy(session),this.defaults);
+        const key=JSON.stringify([row.generation,permission.share,permission.input]);
+        if(this.agentSynced.get(row.runtimeId)===key&&row.shared===permission.share&&row.allowControl===permission.input)continue;
+        await invoke("agent_runtime_share",{runtimeId:row.runtimeId,generation:row.generation,shared:permission.share,allowControl:permission.input});
+        row.shared=permission.share;row.allowControl=permission.input;this.agentSynced.set(row.runtimeId,key);
+      }
+      if (!this.status) continue;
       for (const session of this.tabs.sessions) {
         const policy = this.policy(session);
         const permission = resolveRemotePermission(policy, this.defaults);
@@ -99,7 +124,10 @@ export class RemoteController {
         const key = JSON.stringify([info.generation, info.title, info.cwd, info.agent, info.agentStatus, enabled, permission.input]);
         if (this.synced.get(session) === key && session.isRemoteShared === enabled
           && (!enabled || session.isRemoteControllable === permission.input)) continue;
-        if (enabled || session.isRemoteShared) await session.setRemoteShared(enabled, permission.input);
+        if (enabled || session.isRemoteShared) {
+          try { await session.setRemoteShared(enabled, permission.input); }
+          catch(error){if(!session.isAgentMode)throw error;}
+        }
         this.synced.set(session, key);
       }
     }
@@ -129,7 +157,7 @@ export class RemoteController {
       this.status = null;
       this.synced.clear();
       for (const session of this.sessions) session.remoteDisabled();
-      this.keepAlive.setEnabled(false);
+      this.keepAlive.setEnabled(this.agents.some(row=>row.state!=="exited"));
     } finally {
       this.stopping = false;
       this.notify();

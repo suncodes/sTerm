@@ -39,24 +39,20 @@ fn list_shells() -> Vec<pty::ShellInfo> {
 // ---------- pty ----------
 
 #[tauri::command]
-fn pty_spawn(
+async fn pty_spawn(
     app: AppHandle,
-    state: tauri::State<AppState>,
+    state: tauri::State<'_, AppState>,
     id: u32,
     generation: u32,
     shell_id: String,
     cwd: Option<String>,
     cols: u16,
     rows: u16,
-    runtime_id: Option<String>,
 ) -> Result<(), String> {
     app.state::<feishu::State>().replaced(id, generation);
     if let Some(hub) = app.state::<remote::RemoteState>().current() { hub.unshare(id, generation.saturating_sub(1)); }
-    let launch = runtime_id.as_deref().map(|runtime| app.state::<agent_runtime::State>().take_launch(runtime, id, generation)).transpose()?;
-    match launch {
-        Some(launch) => state.ptys.spawn_program(app, id, generation, &shell_id, cwd, cols, rows, Some(launch)),
-        None => state.ptys.spawn(app, id, generation, &shell_id, cwd, cols, rows),
-    }
+    let bootstrap=app.state::<agent_runtime::State>().shell.bootstrap(&app,id,generation).await?;
+    state.ptys.spawn_program(app,id,generation,&shell_id,cwd,cols,rows,bootstrap)
 }
 
 #[tauri::command]
@@ -554,10 +550,10 @@ pub fn run() {
             feishu::feishu_test,
             feishu::feishu_agent_event,
             feishu::feishu_input_result,
-            agent_runtime::agent_runtime_prepare,
             agent_runtime::agent_runtime_list,
-            agent_runtime::agent_runtime_cancel,
             agent_runtime::agent_runtime_share,
+            agent_runtime::shell::agent_access_status,
+            agent_runtime::shell::agent_access_set_enabled,
             remote::remote_start,
             remote::remote_status,
             remote::remote_pair,

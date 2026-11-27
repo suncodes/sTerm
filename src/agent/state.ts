@@ -11,7 +11,7 @@ export function applyChanges(session: AgentSession, changes: AgentChange[]): Age
         case "ready":
           if (event.sessionId !== row.sessionId) { row.items = []; row.approvals = []; row.turnId = ""; }
           row.sessionId = event.sessionId; row.model = event.model; row.models = event.models;
-          row.capabilities = event.capabilities; row.state = "idle"; row.error = null; row.settingsRevision++; break;
+          row.capabilities = { ...event.capabilities, end: row.capabilities.end }; row.state = "idle"; row.error = null; row.settingsRevision++; break;
         case "state":
           if (!["idle","running","waiting","offline","exited"].includes(event.state)) break;
           row.state = event.state; row.turnId = event.turnId;

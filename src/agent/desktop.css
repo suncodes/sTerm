@@ -1,8 +1,7 @@
-.agent-desktop-dialog { width:min(660px,90vw);max-height:85vh;overflow:auto;border:1px solid #3c4554;border-radius:12px;background:#161b23;color:#e6edf5;padding:24px;font:14px system-ui; }
-.agent-desktop-dialog::backdrop { background:#0009 }
-.agent-desktop-dialog h2 { margin-top:0 }.agent-desktop-dialog p { color:#aebaca;line-height:1.7 }
-.agent-desktop-dialog button,.agent-desktop-dialog select,.agent-desktop-dialog input { background:#242d3a;border:1px solid #46536a;color:#edf3fb;border-radius:6px;padding:9px 12px;font:inherit }
-.agent-desktop-dialog button { cursor:pointer }.agent-desktop-dialog :focus-visible { outline:2px solid #9dc5ff;outline-offset:2px }
-.agent-dialog-close { float:right }.agent-launch-controls { display:flex;gap:8px;flex-wrap:wrap;margin:20px 0 }
-.agent-launch-controls input { flex:1 0 100%;box-sizing:border-box;min-width:0 }.agent-desktop-row { display:flex;align-items:center;gap:12px;border-top:1px solid #303a49;padding:14px 0 }
-.agent-desktop-row span { flex:1;min-width:0 }.agent-desktop-row small { display:block;color:#99a8ba;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:4px }
+/* 延续 sTerm 设置与终端布局，不增加独立 Agent 管理窗口。 */
+#term-wrap{display:flex;flex-direction:column}
+#panes{flex:1;min-height:0;position:relative;inset:auto}
+.agent-share-strip{min-height:30px;flex-shrink:0;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);padding:0 12px;background:var(--bg);color:var(--fg-dim);font-size:10px}
+.agent-share-strip[hidden]{display:none}
+.agent-share-strip>span{flex:1}
+.agent-share-strip>button{border:0;background:transparent;color:var(--accent);font:inherit;min-height:29px;padding:0 5px;cursor:pointer}

@@ -315,6 +315,39 @@ test("controller applies inherited permissions to new and restarted sessions and
   assert.equal(controller.status, null);
 });
 
+test("Agent shares inherit existing defaults without raw terminal control and preserve explicit exceptions", async () => {
+  const storage=new Map(),calls=[];
+  globalThis.localStorage={getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value)};
+  globalThis.remoteFixture={invoke:async(command,args)=>{calls.push([command,args]);return null;}};
+  const session=id=>({
+    id,generation:1,isRunning:true,isRemoteShared:true,isRemoteControllable:false,isRemotePaused:false,isAgentMode:false,
+    remoteInfo(){return {id:this.id,generation:this.generation,title:"Session "+this.id};},
+    setAgentRuntime(value){this.isAgentMode=Boolean(value);},
+    resumeRemoteSharing(){this.isRemotePaused=false;},
+    remoteDisabled(){this.isRemoteShared=false;},
+    async setRemoteShared(value){this.isRemoteShared=value;},
+  });
+  const one=session(1),two=session(2),tabs={sessions:[one,two],byId:id=>tabs.sessions.find(row=>row.id===id)};
+  const controller=new RemoteController(tabs);
+  controller.status={enabled:true,port:18765,origins:[],sessions:[],clients:0};
+  await controller.updateAgents([{runtimeId:"a",tabId:1,generation:1,state:"idle",shared:false,allowControl:false},{runtimeId:"b",tabId:2,generation:1,state:"idle",shared:false,allowControl:false}]);
+  assert.ok(one.isAgentMode&&two.isAgentMode);
+  assert.ok(!one.isRemoteShared&&!two.isRemoteShared);
+  assert.ok(controller.agents.every(row=>row.shared&&!row.allowControl));
+  await controller.setPolicy(two,"readonly");
+  await controller.setDefaults({share:true,input:true});
+  assert.equal(controller.agents[0].allowControl,true);
+  assert.equal(controller.agents[1].allowControl,false);
+  await controller.setDefaults({share:false,input:false});
+  assert.equal(controller.agents[0].shared,false);
+  assert.equal(controller.agents[1].shared,true);
+  await controller.setPolicy(one,"control");
+  assert.equal(controller.agents[0].allowControl,true);
+  one.generation++;
+  await controller.updateAgents([{runtimeId:"old",tabId:1,generation:1,state:"idle",shared:false,allowControl:false}]);
+  assert.equal(one.isAgentMode,false);
+  assert.ok(!calls.some(([command,args])=>command==="agent_runtime_share"&&args.runtimeId==="old"));
+});
 test("late joining restores alternate screen and incremental output", async () => {
   const source = new Terminal({ cols: 80, rows: 24, allowProposedApi: true });
   const viewer = new Terminal({ cols: 80, rows: 24, allowProposedApi: true, disableStdin: true });

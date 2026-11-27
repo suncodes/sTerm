@@ -31,12 +31,17 @@ async fn run(app: &AppHandle, command: &Value) -> Result<Value, String> {
             let tab = command["tab"].as_u64().ok_or("tab")? as u32;
             let cwd = command["cwd"].as_str().ok_or("cwd")?;
             let agent = command["agent"].as_str().ok_or("agent")?;
-            // 与桌面入口使用同一 prepare → 一次性上下文 → pty_spawn 链。
-            app.state::<crate::AppState>().ptys.spawn(app.clone(),tab,1,"pwsh",Some(cwd.into()),130,38)?;
-            let launch = super::agent_runtime_prepare(app.clone(), app.get_webview_window("main").ok_or("main")?, app.state::<State>(), tab, 2, agent.into(), cwd.into(), command["resume"].as_str().map(str::to_string)).await?;
-            let id = launch.runtime_id.clone();
-            crate::pty_spawn(app.clone(),app.state::<crate::AppState>(),tab,2,"pwsh".into(),Some(cwd.into()),130,38,Some(id.clone()))?;
-            Ok(json!({"runtimeId":id}))
+            // 与实际电脑端一致：普通 Shell 内直接执行 Agent，保留原 Shell 和终端代际。
+            crate::pty_spawn(app.clone(),app.state::<crate::AppState>(),tab,2,command["shell"].as_str().unwrap_or("pwsh").into(),Some(cwd.into()),130,38).await?;
+            tokio::time::sleep(std::time::Duration::from_millis(1800)).await;
+            app.state::<crate::AppState>().ptys.write(tab,2,&format!("{agent}\r"))?;
+            for _ in 0..300{
+                if let Some(row)=state.hub.list(false)["sessions"].as_array().and_then(|rows|rows.iter().find(|row|row["tabId"]==tab&&row["state"]!="exited")).cloned(){
+                    return Ok(json!({"runtimeId":row["runtimeId"]}));
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            Err("终端启动 Agent 超时".into())
         }
         "write" => {
             app.state::<crate::AppState>().ptys.write(command["tab"].as_u64().ok_or("tab")? as u32,2,command["data"].as_str().ok_or("data")?)?;
@@ -47,6 +52,16 @@ async fn run(app: &AppHandle, command: &Value) -> Result<Value, String> {
         "share" => {
             state.hub.share(command["runtimeId"].as_str().ok_or("runtime")?,2,command["shared"].as_bool().unwrap_or(true),command["control"].as_bool().unwrap_or(true))?;
             Ok(json!({}))
+        }
+        "codex_turns" => {
+            let thread=match command["sessionId"].as_str(){
+                Some(id)=>id.to_owned(),
+                None=>state.hub.snapshot(command["runtimeId"].as_str().ok_or("runtime")?,false)?.session_id,
+            };
+            let server=state.codex.lock().await;
+            let client=server.as_ref().ok_or("Codex backend")?.client.clone();
+            drop(server);
+            client.call("thread/turns/list",json!({"threadId":thread,"limit":1,"sortDirection":"desc"})).await
         }
         "disconnect_codex" => {
             let server = state.codex.lock().await;

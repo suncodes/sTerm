@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>sTerm · Agent 界面原型</title><link rel="icon" href="data:,">
+  <link rel="stylesheet" href="../../src/style.css">
+  <link rel="stylesheet" href="agent-mode.css">
+  <script src="agent-mode.js" defer></script>
+</head>
+<body data-view="compare">
+  <header class="review-header">
+    <div class="review-identity"><span class="review-mark" aria-hidden="true">›_</span><div><strong>sTerm <span>Agent 模式</span></strong><small>交互原型 · 模拟数据</small></div></div>
+    <nav class="view-tabs" aria-label="原型视图">
+      <button data-view="mobile" aria-pressed="false">手机端</button>
+      <button data-view="browser" aria-pressed="false">宽屏网页</button>
+      <button data-view="desktop" aria-pressed="false">电脑端</button>
+      <button data-view="compare" aria-pressed="true">并排</button>
+    </nav>
+    <a class="design-link" href="../agent-mode-prototype.md" target="_blank" rel="noopener">设计说明 ↗</a>
+  </header>
+  <section class="scenario-bar" aria-label="演示控制">
+    <span class="scenario-label">演示状态</span>
+    <div id="scenario-options" class="scenario-options" role="group" aria-label="切换演示状态">
+      <button data-scenario="idle" aria-pressed="true">空闲</button>
+      <button data-scenario="running" aria-pressed="false">实时输出</button>
+      <button data-scenario="approval" aria-pressed="false">等待审批</button>
+      <button data-scenario="queued" aria-pressed="false">追加消息</button>
+      <button data-scenario="readonly" aria-pressed="false">只读</button>
+      <button data-scenario="offline" aria-pressed="false">断线</button>
+      <button data-scenario="error" aria-pressed="false">操作失败</button>
+      <button data-scenario="ended" aria-pressed="false">已结束</button>
+      <button data-scenario="empty" aria-pressed="false">无会话</button>
+    </div>
+    <button id="finish-demo" class="reset-demo" hidden>演示本轮完成</button><button id="reset-demo" class="reset-demo" title="重置当前演示">重置</button>
+  </section>
+  <div class="review-context"><p id="scenario-description">电脑与网页共享同一会话。试试模型、权限菜单和右侧会话列表。</p><span>仅演示界面，不连接真实 Agent</span></div>
+  <main class="review-stage">
+    <section class="preview browser-preview" aria-label="网页端预览">
+      <div class="preview-caption"><strong>网页端</strong><span>沿用现有连接栏、会话 Tab 与灰阶主题</span></div>
+      <div class="browser-frame"><div class="browser-address"><span class="browser-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>sterm.example.invalid / Agent</span></div><iframe id="browser-preview" src="agent-surface.html?surface=web" title="宽屏 Agent 网页交互原型"></iframe></div>
+    </section>
+    <section class="preview phone-preview" aria-label="手机端预览">
+      <div class="preview-caption"><strong>手机端</strong><label>宽度 <select id="phone-width" aria-label="手机预览宽度"><option value="360">360</option><option value="390" selected>390</option><option value="430">430</option></select></label></div>
+      <div class="phone-frame"><iframe id="phone-preview" src="agent-surface.html?surface=web" title="手机 Agent 网页交互原型"></iframe></div>
+    </section>
+    <section class="preview desktop-preview" aria-label="电脑端预览">
+      <div class="preview-caption"><strong>电脑端</strong><span>保留原生终端 · 分享设置融入远程访问</span><button id="simulate-launch">演示终端启动 Agent</button></div>
+      <div class="desktop-frame"><iframe id="desktop-preview" src="agent-surface.html?surface=desktop" title="sTerm 电脑端自动接入与分享设置原型"></iframe></div>
+    </section>
+  </main>
+  <footer class="review-footer"><span id="interaction-feedback" role="status">可点击：会话列表、模型、权限、审批、停止、发送与更多菜单。</span><span>灰阶 #2a2a2e · 4px 控件圆角 · 延续 sTerm</span></footer>
+</body>
+</html>

@@ -5,7 +5,7 @@ export interface AgentSession {
   runtimeId: string; sessionId: string; tabId: number; generation: number; agent: "claude" | "codex";
   title: string; cwd: string; model: string; models: string[]; policy: string; state: string;
   turnId: string; seq: number; settingsRevision: number; shared: boolean; allowControl: boolean; error: string | null;
-  capabilities: { send: boolean; stop: boolean; models: boolean; plan: boolean; policy: boolean; approvals: boolean };
+  capabilities: { send: boolean; stop: boolean; models: boolean; plan: boolean; policy: boolean; approvals: boolean; end?: boolean };
   items: AgentItem[]; approvals: AgentApproval[];
 }
 export interface AgentRoster { revision: number; sessions: AgentSession[] }

@@ -35,6 +35,7 @@ pub struct Capabilities {
     pub plan: bool,
     pub policy: bool,
     pub approvals: bool,
+    pub end: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]

@@ -66,6 +66,7 @@ export interface SettingsCallbacks {
   /** 终端字号变化（含启动时） */
   onTermFont: (px: number) => void;
   shellId: string;
+  page?: string;
   remote: RemoteController;
 }
 
@@ -344,6 +345,19 @@ export function openSettings(cb: SettingsCallbacks): void {
 
   const renderIntegrations = (): HTMLElement => {
     const page = el("div");
+    page.appendChild(el("div","settings-section","Agent 会话接入"));
+    const accessRow=el("label","settings-row");
+    accessRow.append(el("span","settings-label","自动接入终端中的 Claude / Codex"));
+    const access=el("input","settings-switch");access.type="checkbox";access.disabled=true;
+    access.setAttribute("aria-label","自动接入 Agent 会话");accessRow.append(access);page.append(accessRow);
+    page.append(el("p","settings-integration-description","在当前 sTerm 的终端输入 claude / codex 即可接入。仅影响新建终端，不写入 Shell profile 或 Agent 配置。普通命令与未支持的启动参数继续使用原生 CLI。"));
+    void invoke<{enabled:boolean}>("agent_access_status").then(status=>{access.checked=status.enabled;access.disabled=false;}).catch(error=>{page.append(el("p","settings-error",String(error)));});
+    access.onchange=async()=>{
+      access.disabled=true;
+      try{await invoke("agent_access_set_enabled",{enabled:access.checked});}
+      catch(error){access.checked=!access.checked;page.append(el("p","settings-error",String(error)));}
+      finally{access.disabled=false;}
+    };
     page.appendChild(el("div", "settings-section", "PowerShell 目录上报"));
     page.appendChild(el("div", "settings-integration-description",
       "可选。安装后会在当前 PowerShell 的 $PROFILE 中加入一小段 OSC 7 代码，用于更准确地识别终端当前目录；其他 profile 内容保持不变。"));
@@ -564,5 +578,5 @@ export function openSettings(cb: SettingsCallbacks): void {
     nav.appendChild(item);
     items.push(item);
   }
-  select("appearance");
+  select(cb.page??"appearance");
 }

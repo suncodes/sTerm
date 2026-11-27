@@ -99,23 +99,10 @@ impl PtyManager {
         Ok((size.cols,size.rows))
     }
 
-    pub fn spawn(
-        &self,
-        app: AppHandle,
-        id: u32,
-        generation: u32,
-        shell_id: &str,
-        cwd: Option<String>,
-        cols: u16,
-        rows: u16,
-    ) -> Result<(), String> {
-        self.spawn_program(app, id, generation, shell_id, cwd, cols, rows, None)
-    }
-
     pub fn spawn_program(
         &self, app: AppHandle, id: u32, generation: u32, shell_id: &str,
         cwd: Option<String>, cols: u16, rows: u16,
-        launch: Option<crate::agent_runtime::launcher::Launch>,
+        bootstrap: Option<crate::agent_runtime::shell::Bootstrap>,
     ) -> Result<(), String> {
         let size = checked_size(cols, rows)?;
         // 同一标签重启时清理旧实例，事件通过 generation 隔离。
@@ -132,10 +119,23 @@ impl PtyManager {
         let event_route = events::prepare(id, generation)?;
         let mut cmd = CommandBuilder::new(&shell.program);
         cmd.args(&shell.args);
-        if let Some(launch) = launch {
-            cmd = CommandBuilder::new(launch.program);
-            cmd.args(launch.args);
-            for (name, value) in launch.env { cmd.env(name, value); }
+        if let Some(bootstrap)=bootstrap{
+            cmd.env("STERM_SHELL_BRIDGE",bootstrap.address);
+            cmd.env("STERM_SHELL_TOKEN",bootstrap.token);
+            if shell.id=="cmd"{
+                let directory=bootstrap.script.parent().unwrap().join("cmd");
+                std::fs::create_dir_all(&directory).map_err(|e|e.to_string())?;
+                let pwsh=resolve_shell("pwsh");
+                for agent in ["claude","codex"]{
+                    let command=format!("@echo off\r\n\"{}\" -NoLogo -NoProfile -File \"{}\" {} %*\r\n",pwsh.program,bootstrap.script.display(),agent);
+                    std::fs::write(directory.join(format!("{agent}.cmd")),command).map_err(|e|e.to_string())?;
+                }
+                let path=std::env::var("PATH").unwrap_or_default();
+                cmd.env("PATH",format!("{};{path}",directory.display()));
+            }else{
+                let script=bootstrap.script.to_string_lossy().replace('\'',"''");
+                cmd.args(["-NoExit","-Command",&format!(". '{script}'")]);
+            }
         }
         cmd.env("TERM", "xterm-256color");
         if shell.id == "cmd" { cmd.env("STERM_PATH_PERCENT", "%"); }
