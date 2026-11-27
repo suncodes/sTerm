@@ -12,6 +12,8 @@ sTerm source code is licensed under Apache License 2.0. Third-party components r
 | serde / serde_json / uuid / base64 | lockfile-pinned | Apache-2.0 or MIT |
 | xterm.js and its fit, search, web-links, serialize addons | 5.5.0 / lockfile-pinned | MIT |
 | qrcode | 1.5.4 | MIT |
+| marked | 18.3.0 | MIT |
+| DOMPurify | 3.5.0 | Apache-2.0 (selected from Apache-2.0 OR MPL-2.0) |
 | axum / tokio / if-addrs | lockfile-pinned | MIT |
 | prost / prost-derive | 0.14.x | Apache-2.0 |
 | tokio-tungstenite / tungstenite | 0.29.x | MIT |
@@ -35,6 +37,16 @@ The distributed web assets include xterm.js and its addons. They are licensed un
 The QR-code generator qrcode includes this MIT copyright notice:
 
     Copyright (c) 2012 Ryan Day
+
+## Agent page rendering
+
+The distributed Agent page uses marked (MIT) and DOMPurify (Apache-2.0 selected):
+
+    Copyright (c) 2018+, MarkedJS (https://github.com/markedjs/)
+    Copyright (c) 2011-2018, Christopher Jeffrey (https://github.com/chjj/)
+    Copyright (c) 2015+, Cure53 and other contributors
+
+DOMPurify is used without source modifications. The Apache-2.0 license is reproduced in the root LICENSE; MIT terms are reproduced below.
 
 ## Windows console runtime
 

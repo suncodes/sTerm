@@ -30,10 +30,10 @@ pub fn lease(dir: &Path) -> Result<File, String> {
     Ok(file)
 }
 
-struct Job(OwnedHandle);
+pub(crate) struct Job(OwnedHandle);
 
 impl Job {
-    fn new() -> Result<Self, String> {
+    pub(crate) fn new() -> Result<Self, String> {
         let handle = own_handle(unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) })
             .ok_or_else(|| process_error("无法创建公网进程托管"))?;
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
@@ -44,7 +44,7 @@ impl Job {
         Ok(Self(handle))
     }
 
-    fn assign(&self, child: &Child) -> Result<(), String> {
+    pub(crate) fn assign(&self, child: &Child) -> Result<(), String> {
         if unsafe { AssignProcessToJobObject(self.0.as_raw_handle(), child.as_raw_handle()) } == 0 {
             return Err(process_error("无法托管公网组件，已取消启动"));
         }

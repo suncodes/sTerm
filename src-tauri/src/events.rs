@@ -26,7 +26,10 @@ const HOOK_SCRIPT: &str = "@echo off\r\nif \"%~1\"==\"\" exit /b 0\r\nif not def
 
 pub fn init() -> Result<(), String> {
     let base = std::env::var("LOCALAPPDATA").map_err(|_| "缺少 LOCALAPPDATA".to_string())?;
-    let root = PathBuf::from(base).join("sTerm");
+    let root = if cfg!(debug_assertions) {
+        std::env::var_os("STERM_DEV_DATA_DIR").map(|path| PathBuf::from(path).join("legacy-events"))
+            .unwrap_or_else(|| PathBuf::from(&base).join("sTerm"))
+    } else { PathBuf::from(base).join("sTerm") };
     HUB.set(EventHub::new(root.join("events"))?)
         .map_err(|_| "事件信箱已初始化".to_string())
 }

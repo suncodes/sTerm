@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use crate::{paths, storage};
 
@@ -46,7 +46,7 @@ impl Store {
     /// 从当前应用配置目录加载，兼容旧版纯数组。
     /// 只有文件不存在时使用空配置；读取或解析失败时保留原文件并报错。
     pub fn load(app: &AppHandle) -> Result<Self, String> {
-        let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+        let dir = crate::app_dirs::directory(app, "config")?;
         Self::from_file(dir.join("workspaces.json"))
     }
 

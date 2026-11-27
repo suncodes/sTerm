@@ -85,7 +85,7 @@ impl TunnelState {
 }
 
 fn directory(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_local_data_dir().map_err(|error| error.to_string())?.join("remote-tools");
+    let dir = crate::app_dirs::directory(app, "data")?.join("remote-tools");
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     Ok(dir)
 }

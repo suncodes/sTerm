@@ -95,7 +95,7 @@ export class RemoteController {
         const policy = this.policy(session);
         const permission = resolveRemotePermission(policy, this.defaults);
         const info = session.remoteInfo();
-        const enabled = permission.share && session.isRunning && !session.isRemotePaused;
+        const enabled = !session.isAgentMode && permission.share && session.isRunning && !session.isRemotePaused;
         const key = JSON.stringify([info.generation, info.title, info.cwd, info.agent, info.agentStatus, enabled, permission.input]);
         if (this.synced.get(session) === key && session.isRemoteShared === enabled
           && (!enabled || session.isRemoteControllable === permission.input)) continue;
@@ -136,4 +136,3 @@ export class RemoteController {
     }
   }
 }
-

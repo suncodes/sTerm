@@ -1,4 +1,6 @@
 mod agent_turn;
+mod agent_runtime;
+mod app_dirs;
 mod agents;
 mod console;
 mod diagnostics;
@@ -46,9 +48,15 @@ fn pty_spawn(
     cwd: Option<String>,
     cols: u16,
     rows: u16,
+    runtime_id: Option<String>,
 ) -> Result<(), String> {
     app.state::<feishu::State>().replaced(id, generation);
-    state.ptys.spawn(app, id, generation, &shell_id, cwd, cols, rows)
+    if let Some(hub) = app.state::<remote::RemoteState>().current() { hub.unshare(id, generation.saturating_sub(1)); }
+    let launch = runtime_id.as_deref().map(|runtime| app.state::<agent_runtime::State>().take_launch(runtime, id, generation)).transpose()?;
+    match launch {
+        Some(launch) => state.ptys.spawn_program(app, id, generation, &shell_id, cwd, cols, rows, Some(launch)),
+        None => state.ptys.spawn(app, id, generation, &shell_id, cwd, cols, rows),
+    }
 }
 
 #[tauri::command]
@@ -88,6 +96,7 @@ fn pty_kill(
 ) -> Result<(), String> {
     if let Some(hub) = app.state::<remote::RemoteState>().current() { hub.unshare(id, generation); }
     app.state::<feishu::State>().closed(id, generation);
+    app.state::<agent_runtime::State>().retire(id, generation);
     state.ptys.kill(id, generation)
 }
 
@@ -502,13 +511,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
-            if let Ok(dir) = app.path().app_log_dir() {
+            if let Ok(dir) = app_dirs::directory(app.handle(), "logs") {
                 diagnostics::init(&dir);
             }
             console::init(&app.path().resource_dir()?)?;
             let store = workspaces::Store::load(app.handle())?;
             app.manage(overlay::OverlayState::load(app.handle())?);
             app.manage(remote::RemoteState::default());
+            app.manage(agent_runtime::State::default());
             app.manage(tunnel::TunnelState::default());
             app.manage(feishu::State::default());
             app.manage(AppState {
@@ -519,6 +529,8 @@ pub fn run() {
             events::init()?;
             events::spawn_poller(app.handle().clone());
             app.state::<feishu::State>().initialize(app.handle());
+            #[cfg(debug_assertions)]
+            agent_runtime::dev::start(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -526,6 +538,7 @@ pub fn run() {
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
                 let _ = window.app_handle().state::<tunnel::TunnelState>().stop();
                 window.app_handle().state::<remote::RemoteState>().stop();
+                window.app_handle().state::<agent_runtime::State>().stop();
                 window.app_handle().state::<feishu::State>().stop();
                 if let Some(state) = window.app_handle().try_state::<AppState>() {
                     state.ptys.kill_all();
@@ -541,6 +554,10 @@ pub fn run() {
             feishu::feishu_test,
             feishu::feishu_agent_event,
             feishu::feishu_input_result,
+            agent_runtime::agent_runtime_prepare,
+            agent_runtime::agent_runtime_list,
+            agent_runtime::agent_runtime_cancel,
+            agent_runtime::agent_runtime_share,
             remote::remote_start,
             remote::remote_status,
             remote::remote_pair,

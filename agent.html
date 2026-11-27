@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>sTerm · Agent</title></head>
+<body>
+<div id="agent-app">
+  <header class="agent-header"><div class="agent-brand"><strong>sTerm</strong><span>Agent 会话</span></div><nav aria-label="显示模式"><a href="/remote.html">终端</a><a href="/agent.html" aria-current="page">Agent</a></nav><span id="agent-connection" role="status">正在连接…</span></header>
+  <section id="login-panel" class="login-panel" aria-labelledby="login-title"><div class="login-card"><h1 id="login-title">连接你的 sTerm</h1><p id="login-message" role="status">正在检查访问授权…</p><form id="login-form" hidden><label for="login-password">访问码</label><div class="login-password-field"><input id="login-password" type="password" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="current-password" required><button id="login-show" type="button" aria-pressed="false">显示</button></div><button id="login-submit" type="submit">进入</button></form><button id="login-retry" hidden>重新连接</button></div></section>
+  <div id="agent-layout" hidden>
+    <aside class="agent-sidebar"><h2>共享会话</h2><div id="agent-sessions" role="list" aria-label="共享 Agent 会话"></div><p id="agent-empty">在电脑端的 Agent 面板启动并分享会话。</p></aside>
+    <main class="agent-conversation">
+      <div class="agent-session-heading"><div><h1 id="agent-title">选择一个会话</h1><p id="agent-path"></p></div><span id="agent-state"></span></div>
+      <div class="agent-toolbar"><label>模型 <select id="agent-model" aria-label="当前模型" disabled></select></label><span id="agent-policy"></span><span id="agent-policy-actions" hidden><button type="button" data-sandbox="read-only">只读 · 按需审批</button><button type="button" data-sandbox="workspace-write">工作区写入 · 按需审批</button></span><button id="agent-plan" hidden>进入 Plan</button></div>
+      <p id="agent-notice" role="status" hidden></p>
+      <div id="agent-messages" class="agent-messages" role="log" aria-label="会话内容" aria-live="off"></div>
+      <div id="agent-approvals" class="agent-approvals"></div>
+      <form id="agent-composer" class="agent-composer"><label class="sr-only" for="agent-draft">发送给 Agent</label><textarea id="agent-draft" rows="3" placeholder="输入消息，Ctrl / ⌘ + Enter 发送…" disabled></textarea><div class="agent-composer-actions"><span id="agent-input-hint">电脑端始终可操作</span><button id="agent-stop" type="button" disabled>停止</button><button id="agent-send" type="submit" disabled>发送</button></div></form>
+    </main>
+  </div>
+</div>
+<script type="module" src="/src/agent/client.ts"></script>
+</body></html>

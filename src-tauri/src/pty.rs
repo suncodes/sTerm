@@ -92,6 +92,13 @@ impl PtyManager {
         }
     }
 
+    #[cfg(debug_assertions)]
+    pub fn debug_size(&self, id: u32) -> Result<(u16,u16), String> {
+        let pty = self.ptys.lock().unwrap().get(&id).cloned().ok_or("终端已退出")?;
+        let size = pty.master.lock().unwrap().get_size().map_err(|e|e.to_string())?;
+        Ok((size.cols,size.rows))
+    }
+
     pub fn spawn(
         &self,
         app: AppHandle,
@@ -101,6 +108,14 @@ impl PtyManager {
         cwd: Option<String>,
         cols: u16,
         rows: u16,
+    ) -> Result<(), String> {
+        self.spawn_program(app, id, generation, shell_id, cwd, cols, rows, None)
+    }
+
+    pub fn spawn_program(
+        &self, app: AppHandle, id: u32, generation: u32, shell_id: &str,
+        cwd: Option<String>, cols: u16, rows: u16,
+        launch: Option<crate::agent_runtime::launcher::Launch>,
     ) -> Result<(), String> {
         let size = checked_size(cols, rows)?;
         // 同一标签重启时清理旧实例，事件通过 generation 隔离。
@@ -117,6 +132,11 @@ impl PtyManager {
         let event_route = events::prepare(id, generation)?;
         let mut cmd = CommandBuilder::new(&shell.program);
         cmd.args(&shell.args);
+        if let Some(launch) = launch {
+            cmd = CommandBuilder::new(launch.program);
+            cmd.args(launch.args);
+            for (name, value) in launch.env { cmd.env(name, value); }
+        }
         cmd.env("TERM", "xterm-256color");
         if shell.id == "cmd" { cmd.env("STERM_PATH_PERCENT", "%"); }
         cmd.env("STERM_TAB_ID", event_route);
@@ -194,6 +214,7 @@ impl PtyManager {
             };
             events::retire(id, generation);
             app.state::<crate::feishu::State>().closed(id, generation);
+            app.state::<crate::agent_runtime::State>().retire(id, generation);
             drop(old);
             let _ = app.emit(
                 "pty-exit",
@@ -206,6 +227,10 @@ impl PtyManager {
         });
 
         Ok(())
+    }
+
+    pub fn has_generation(&self, id: u32, generation: u32) -> bool {
+        self.ptys.lock().unwrap().get(&id).is_some_and(|p| p.generation == generation)
     }
 
     pub fn write(&self, id: u32, generation: u32, data: &str) -> Result<(), String> {

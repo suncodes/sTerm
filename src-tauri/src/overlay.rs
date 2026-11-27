@@ -90,7 +90,7 @@ pub struct OverlayState {
 
 impl OverlayState {
     pub fn load(app: &AppHandle) -> Result<Self, String> {
-        let file = app.path().app_config_dir().map_err(|e| e.to_string())?.join("overlay.json");
+        let file = crate::app_dirs::directory(app, "config")?.join("overlay.json");
         let prefs = match storage::read_json::<Preferences>(&file) {
             Ok(prefs) => prefs.unwrap_or_default(),
             Err(error) => {

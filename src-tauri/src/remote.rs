@@ -32,11 +32,13 @@ pub trait RemoteHost: Send + Sync {
     fn control_changed(&self, session: &SharedSession);
     fn resize(&self, id: u32, generation: u32, cols: u16, rows: u16) -> Result<(), String>;
     fn asset(&self, path: &str) -> Option<(Vec<u8>, String)>;
+    fn agent_hub(&self) -> Option<crate::agent_runtime::hub::SharedHub> { None }
 }
 
 struct DesktopHost(AppHandle);
 
 impl RemoteHost for DesktopHost {
+    fn agent_hub(&self) -> Option<crate::agent_runtime::hub::SharedHub> { Some(crate::agent_runtime::web::hub(&self.0)) }
     fn snapshot(&self, id: u32, generation: u32, request: &str) -> Result<(), String> {
         self.0.emit("remote-snapshot-request", json!({"id": id, "generation": generation, "request": request}))
             .map_err(|error| error.to_string())
@@ -165,11 +167,28 @@ impl RemoteHub {
         }
     }
 
+    pub(crate) fn agent_authenticated(&self, headers: &HeaderMap) -> bool {
+        !self.stopped.load(Ordering::Relaxed) && self.authenticate(headers).is_some()
+    }
+
+    pub(crate) fn submit_agent(&self, headers: &HeaderMap, command: crate::agent_runtime::protocol::Command) -> Result<crate::agent_runtime::protocol::Receipt, String> {
+        let _input = self.input.lock().unwrap();
+        if !self.agent_authenticated(headers) { return Err("浏览器授权已撤销".into()); }
+        self.agent_hub().ok_or("Agent 服务不可用")?.submit(command, true)
+    }
+
+    pub(crate) fn agent_hub(&self) -> Option<crate::agent_runtime::hub::SharedHub> {
+        self.host.agent_hub()
+    }
+
     fn roster(&self) {
         let _ = self.events.send(json!({"type": "sessions", "sessions": self.status().sessions}));
     }
 
     pub fn share(&self, mut session: SharedSession) -> Result<(), String> {
+        if self.host.agent_hub().is_some_and(|hub| hub.has_tab(session.id, session.generation)) {
+            return Err("此终端已接入 Agent 模式，请在 Agent 面板分享".into());
+        }
         if session.cols < 2 || session.rows == 0 || session.title.len() > 512 {
             return Err("无效的会话信息".into());
         }
@@ -392,6 +411,7 @@ impl RemoteHub {
             inner.password = password;
             inner.login_limiter = LoginLimiter::default();
         }
+        if let Some(agent) = self.agent_hub() { agent.revoke_operations(); }
         inner.clients.clear();
         inner.pairs.clear();
         inner.connected.clear();
@@ -414,7 +434,11 @@ impl RemoteHub {
     }
 
     fn stop(&self) {
-        self.stopped.store(true, Ordering::Relaxed);
+        {
+            let _input = self.input.lock().unwrap();
+            self.stopped.store(true, Ordering::Relaxed);
+            if let Some(agent) = self.agent_hub() { agent.revoke_operations(); }
+        }
         for session in self.status().sessions { self.reclaim(session.id, None); }
         self.inner.lock().unwrap().clients.clear();
         let _ = self.events.send(json!({"type": "stopped"}));
@@ -649,7 +673,7 @@ async fn run_socket(mut socket: WebSocket, hub: Arc<RemoteHub>, client: String) 
 
 async fn asset_handler(State(hub): State<Arc<RemoteHub>>, request: Request<Body>) -> Response {
     let path = match request.uri().path() { "/" => "remote.html", path => path.trim_start_matches('/') };
-    let permitted = path == "remote.html" || path.starts_with("assets/") && !path.contains("..") && !path.contains('%');
+    let permitted = path == "remote.html" || path == "agent.html" || path.starts_with("assets/") && !path.contains("..") && !path.contains('%');
     if !permitted { return StatusCode::NOT_FOUND.into_response(); }
     match hub.host.asset(path) {
         Some((bytes, mime)) => ([(header::CONTENT_TYPE, mime)], bytes).into_response(),
@@ -660,6 +684,7 @@ async fn asset_handler(State(hub): State<Arc<RemoteHub>>, request: Request<Body>
 fn router(hub: Arc<RemoteHub>) -> Router {
     Router::new().route("/api/pair", post(pair_handler)).route("/api/auth", get(auth_handler))
         .route("/api/password/login", post(password_handler)).route("/api/ws", get(websocket_handler))
+        .merge(crate::agent_runtime::web::routes())
         .fallback(get(asset_handler)).layer(DefaultBodyLimit::max(4096))
         .layer(middleware::from_fn_with_state(hub.clone(), guard)).with_state(hub)
 }
@@ -681,7 +706,7 @@ impl RemoteState {
 }
 
 fn password_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    let dir = app.path().app_local_data_dir().map_err(|_| "无法定位访问码配置目录")?.join("remote-auth");
+    let dir = crate::app_dirs::directory(app, "data")?.join("remote-auth");
     Ok(dir.join("password.credential"))
 }
 
@@ -1065,6 +1090,26 @@ mod tests {
     }
 
     #[test]
+    fn agent_runtime_cannot_be_shared_as_a_raw_terminal() {
+        struct AgentHost(crate::agent_runtime::hub::SharedHub);
+        impl RemoteHost for AgentHost {
+            fn agent_hub(&self) -> Option<crate::agent_runtime::hub::SharedHub> { Some(self.0.clone()) }
+            fn snapshot(&self, _:u32, _:u32, _: &str) -> Result<(),String> { Ok(()) }
+            fn write(&self, _:u32, _:u32, _: &str) -> Result<(),String> { Ok(()) }
+            fn control_changed(&self, _: &SharedSession) {}
+            fn resize(&self, _:u32, _:u32, _:u16, _:u16) -> Result<(),String> { Ok(()) }
+            fn asset(&self, _: &str) -> Option<(Vec<u8>, String)> { None }
+        }
+        let agents = Arc::new(crate::agent_runtime::hub::Hub::default());
+        agents.register("claude",1,2,"D:/probe".into());
+        let hub = RemoteHub::new(1,vec![],Arc::new(AgentHost(agents)));
+        let session = SharedSession { id:1,generation:2,title:"agent".into(),cols:100,rows:30,allow_control:true,
+            controller:None,epoch:None,seq:0,cwd:None,agent:None,agent_status:None,link_key:None };
+        assert!(hub.share(session).is_err());
+        assert!(hub.status().sessions.is_empty());
+        assert!(hub.local_write_allowed(1,2));
+    }
+    #[test]
     fn downgrading_or_unsharing_immediately_invalidates_control() {
         let (hub, host) = fixture();
         let mut session = SharedSession { id: 1, generation: 2, link_key: None, title: "test".into(), cols: 80, rows: 24,
@@ -1192,5 +1237,3 @@ mod tests {
         server.abort();
     }
 }
-
-

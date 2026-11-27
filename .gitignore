@@ -13,3 +13,5 @@ src-tauri/gen/
 # 一次性截图、实验脚本和诊断材料统一放在这里
 /.tmp/
 __pycache__/
+
+.openidea/

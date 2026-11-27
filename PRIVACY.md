@@ -17,6 +17,8 @@ sTerm 是本地桌面应用。默认不发起遥测、分析或账号登录请�
 | 可选公网组件与凭证 | %LOCALAPPDATA%\io.github.suncodes.sterm\remote-tools | 按需下载的隧道客户端、文件校验值、Cloudflare 地址与当前 Windows 用户 DPAPI 加密的运行凭证 |
 | 飞书机器人凭证 | %LOCALAPPDATA%\io.github.suncodes.sterm\notifications\feishu.credential | 飞书 App ID、App Secret、群 Chat ID 与授权用户 ID，使用当前 Windows 用户 DPAPI 加密；仅在启用通知时连接飞书 |
 | 可选远程访问码 | %LOCALAPPDATA%\io.github.suncodes.sterm\remote-auth | 随机盐与 PBKDF2 校验信息、可恢复的 6 位访问码一起使用当前 Windows 用户 DPAPI 加密；磁盘不保存明文，仅本机设置可主动查看或复制 |
+| Agent 运行资源 | 应用数据目录的 agent-runtime | 本次 Claude Mod 代码与内部连接地址；桥接令牌只通过进程环境传入，不写入代码 |
+| Agent 网页草稿 | 远程浏览器标签页的 sessionStorage | 按会话保存草稿与当前选择，刷新可恢复，发送成功后清除 |
 | 远程输入历史 | 远程浏览器当前访问地址的 localStorage | 保存最近 100 条远程发送的命令或提示词、来源会话名称与时间，供搜索和回填 |
 
 退出 sTerm 后，可自行删除上述目录重置本地设置。删除前请先关闭所有 sTerm 进程。
@@ -46,6 +48,14 @@ sTerm 默认不改写 PowerShell profile、Claude/Codex 配置或 Pi 配置。
 显式选择公网连接时，sTerm 会从 GitHub/Cloudflare 或 ngrok 官方分发源下载组件，并由对应服务转发远程访问流量，受该服务条款与隐私政策约束。HTTPS 由公网服务终止，这不构成浏览器与电脑之间的端到端加密。运行凭证通过子进程环境传入，不写入命令行或日志。Cloudflare 自动配置所需的管理 API Token 只用于当次操作，不保存到磁盘。
 
 sTerm 不注册系统服务、不改写系统环境变量或防火墙规则；退出时仅停止自己启动的隧道进程。独立开发版使用 `io.github.suncodes.sterm.remote-dev` 数据目录。详细操作见 [远程访问说明](docs/remote-access.md)。
+
+## Agent 模式
+
+从顶栏 Agent 面板启动时，sTerm 为该原生进程加载本地 Claude Mod，或创建自有认证 Codex app-server，不改写全局 CLI 配置。Agent 的模型认证及原生历史仍由该 CLI 管理。内部服务只绑定 loopback，浏览器不获得模型 API Key 或内部桥接令牌。
+
+Agent 分享默认关闭；显式授权后向同一远程服务的已登录浏览器发送有限的结构化历史、流式文本、工具参数/结果与审批内容。允许操作和允许查看分开校验；多个网页与原生终端均能操作同一实例。网页快照及回执保留在内存，不新增提示词/响应诊断日志。草稿保存在当前标签页 sessionStorage；关闭该标签页或清除站点数据可清理。
+
+关闭远程访问只撤销浏览器操作，不停止原生 Agent；关闭相应终端标签或退出应用会停止本实例创建的进程，不操作其他 sTerm 或既有 daemon。更多边界见 [Agent 模式说明](docs/agent-mode.md)。
 
 ## 其他数据边界
 

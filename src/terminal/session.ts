@@ -70,6 +70,8 @@ export class TerminalSession {
   private generation = 0;
   private exitedGeneration = 0;
   private starting = false;
+  private preparingAgent = false;
+  private agentRuntimeId: string | null = null;
   private disposed = false;
   private termEl: HTMLElement;
   private overlay: HTMLElement;
@@ -249,9 +251,11 @@ export class TerminalSession {
     });
   }
 
-  async start(): Promise<void> {
+  async start(runtimeId?: string): Promise<void> {
     if (this.disposed || this.starting) return;
+    if (!runtimeId && this.preparingAgent) return;
     this.starting = true;
+    this.agentRuntimeId = runtimeId ?? null;
     if (this.remoteShared) await this.setRemoteShared(false, false).catch(() => this.remoteDisabled());
     this.remotePaused = false;
     this.alive = false;
@@ -275,6 +279,7 @@ export class TerminalSession {
       const cols = this.term.cols;
       const rows = this.term.rows;
       await invoke("pty_spawn", {
+        runtimeId,
         id: this.id,
         generation,
         shellId: this.shell.id,
@@ -300,10 +305,35 @@ export class TerminalSession {
         this.overlay.classList.remove("hidden");
       }
       console.error("PTY 启动失败", error);
+      if (runtimeId) {
+        this.agentRuntimeId = null;
+        await invoke("agent_runtime_cancel", { runtimeId }).catch(() => {});
+        throw error;
+      }
     } finally {
       this.starting = false;
       this.opts.onLifecycle?.();
     }
+  }
+
+  async startAgent(agent: "claude" | "codex", cwd: string, resume?: string): Promise<void> {
+    if (!this.isRunning || this.agentState.agent || this.preparingAgent || this.agentRuntimeId) throw new Error("请使用新终端启动 Agent");
+    const generation = this.generation;
+    this.preparingAgent = true;
+    let runtimeId: string | undefined;
+    try {
+      const launch = await invoke<{ runtimeId: string }>("agent_runtime_prepare", {
+        tabId: this.id, generation: generation + 1, agent, cwd, resume: resume ?? null,
+      });
+      runtimeId = launch.runtimeId;
+      if (this.disposed || this.generation !== generation || !this.alive) throw new Error("终端已关闭或替换");
+      this.cwd = cwd;
+      await this.start(runtimeId);
+      if (this.disposed || !this.alive) throw new Error("Agent 未能启动，请检查终端提示");
+    } catch (error) {
+      if (runtimeId) await invoke("agent_runtime_cancel", { runtimeId }).catch(() => {});
+      throw error;
+    } finally { this.preparingAgent = false; }
   }
 
   async restart(): Promise<void> {
@@ -372,6 +402,7 @@ export class TerminalSession {
   handleExit(generation: number): void {
     if (this.disposed || generation !== this.generation) return;
     this.exitedGeneration = generation;
+    this.agentRuntimeId = null;
     const agent = this.agentState.agent;
     if (agent) this.opts.onAgentEvent?.(this, { agent, event: "end" });
     this.agentState.markExited();
@@ -485,6 +516,7 @@ export class TerminalSession {
   }
 
   get isRunning(): boolean { return this.alive && !this.disposed && !this.starting; }
+  get isAgentMode(): boolean { return this.preparingAgent || this.agentRuntimeId !== null; }
   get isRemoteShared(): boolean { return this.remoteShared; }
   get isRemotePaused(): boolean { return this.remotePaused; }
   resumeRemoteSharing(): void { this.remotePaused = false; }
@@ -501,6 +533,7 @@ export class TerminalSession {
   }
 
   private async updateRemoteSharing(enabled: boolean, allowControl: boolean, generation: number): Promise<void> {
+    if (enabled && this.isAgentMode) throw new Error("此终端使用 Agent 分享，请在 Agent 面板设置权限");
     if (enabled && !this.alive) return;
     const wasShared = this.remoteShared;
     const previousAllow = this.remoteAllowControl;
@@ -533,7 +566,7 @@ export class TerminalSession {
   }
 
   applyRemoteControl(session: SharedSession): void {
-    if (session.generation !== this.generation) return;
+    if (session.generation !== this.generation || this.isAgentMode && session.controller) return;
     this.remoteControlled = Boolean(session.controller);
     this.remoteBanner.classList.toggle("hidden", !this.remoteControlled);
     if (this.term.textarea) this.term.textarea.readOnly = this.remoteControlled;

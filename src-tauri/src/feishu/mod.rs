@@ -122,7 +122,7 @@ struct Completion {
 }
 
 fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app.path().app_local_data_dir().map_err(|_| "无法定位飞书设置目录")?
+    Ok(crate::app_dirs::directory(app, "data")?
         .join("notifications").join("feishu.credential"))
 }
 

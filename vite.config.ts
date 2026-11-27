@@ -9,7 +9,7 @@ export default defineConfig({
   },
   envPrefix: ["VITE_", "TAURI_"],
   build: {
-    rollupOptions: { input: { main: "index.html", overlay: "overlay.html", remote: "remote.html" } },
+    rollupOptions: { input: { main: "index.html", overlay: "overlay.html", remote: "remote.html", agent: "agent.html" } },
     target: "chrome105",
     minify: "esbuild",
     sourcemap: false,
