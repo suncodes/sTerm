@@ -6,6 +6,25 @@ const bundle = await build({ entryPoints: ["src/agent/state.ts"], bundle: true, 
 const { applyChanges } = await import("data:text/javascript;base64," + Buffer.from(bundle.outputFiles[0].contents).toString("base64"));
 const session = () => ({ runtimeId: "r", sessionId: "s", generation: 1, seq: 4, settingsRevision: 2, model: "a", policy: "", state: "running", turnId: "turn", items: [{ id: "a", kind: "assistant", text: "one" }], approvals: [], capabilities: {} });
 
+test("ordered live blocks, native timestamps and unknown background state converge after replay",()=>{
+  const events=[{seq:5,events:[
+    {type:"upsert",item:{id:"thinking",kind:"thinking",text:"summary",data:{startedAtMs:100}}},
+    {type:"upsert",item:{id:"tool",kind:"tool",text:"output",data:{command:"echo one",startedAtMs:200}}},
+    {type:"turn",value:{id:"turn",agentId:"",state:"inProgress",startedAtMs:100}},
+    {type:"task",task:{id:"shell",kind:"shell",state:"running",data:{startedAtMs:200}}}
+  ]},{seq:6,events:[
+    {type:"upsert",item:{id:"thinking",kind:"thinking",text:"finished summary",data:{startedAtMs:null,completedAtMs:300}}},
+    {type:"turn",value:{id:"turn",agentId:"",state:"completed",startedAtMs:null,completedAtMs:400,durationMs:300}},
+    {type:"state",state:"idle",turnId:""}
+  ]}];
+  const original=session(),next=applyChanges(original,events);
+  assert.deepEqual(next.items.map(item=>item.id),["a","thinking","tool"]);
+  assert.equal(next.items[1].data.startedAtMs,100);assert.equal(next.turns[0].durationMs,300);assert.equal(next.turns[0].startedAtMs,100);
+  assert.equal(next.tasks[0].state,"running","parent completion completed a shell");
+  const offline=applyChanges(next,[{seq:7,events:[{type:"state",state:"offline",turnId:""}]}]);
+  assert.equal(offline.tasks[0].state,"unknown");assert.equal(original.items.length,1);
+});
+
 test("incremental reconnect deduplicates replay, rejects gaps, and preserves previous snapshots", () => {
   const original = session();
   const event = { seq: 5, events: [{ type: "delta", id: "a", delta: " two" }] };
@@ -13,6 +32,12 @@ test("incremental reconnect deduplicates replay, rejects gaps, and preserves pre
   assert.equal(next.items[0].text, "one two");
   assert.equal(original.items[0].text, "one");
   assert.equal(applyChanges(original, [{ ...event, seq: 6 }]), null);
+});
+
+test("completed command history cannot prevent new running child tasks from appearing",()=>{
+  const original={...session(),tasks:Array.from({length:64},(_,index)=>({id:"old-"+index,kind:"shell",state:index===0?"running":"completed"}))};
+  const result=applyChanges(original,[{seq:5,events:[{type:"task",task:{id:"child",kind:"agent",state:"running"}}]}]);
+  assert.equal(result.tasks.length,64);assert(result.tasks.some(task=>task.id==="old-0"));assert(result.tasks.some(task=>task.id==="child"));
 });
 
 test("native approval closure and settings changes converge after incremental replay", () => {
@@ -51,4 +76,52 @@ test("session replacement clears old answers, child content and queue, and block
   ]);
   assert.equal(result.state,"blocked");
   assert.deepEqual([result.interactions,result.tasks,result.queuedInputs,result.items],[[],[],[],[]]);
+});
+
+const blockBundle = await build({ entryPoints: ["src/agent/blocking.ts"], bundle: true, write: false, format: "esm", platform: "node" });
+const { blockReview, blockedHtml } = await import("data:text/javascript;base64," + Buffer.from(blockBundle.outputFiles[0].contents).toString("base64"));
+const blockedSession = () => ({...session(),agent:"codex",state:"blocked",capabilities:{send:true},activity:{kind:"blocked",message:"This request was blocked by our safety systems. Reason: Potentially unintended activity.",turnId:"turn",reviewId:"review",details:{detailedExplanation:"Review <script>alert(1)</script> before continuing.",steer:{message:"Continue only within the requested scope."},reviewTarget:"opaque"}}});
+
+test("safety review requires current native explanation and steer, never an opaque target or historical error alone",()=>{
+  const original=blockedSession();assert.equal(blockReview(original).canContinue,true);
+  const variants=[
+    {...original,activity:{kind:"blocked",message:original.activity.message}},
+    {...original,activity:{...original.activity,reviewId:null}},
+    {...original,activity:{...original.activity,details:{reviewTarget:"opaque"}}},
+    {...original,activity:{...original.activity,details:{detailedExplanation:"Explanation only"}}},
+    {...original,activity:{...original.activity,continuationStatus:"submitted"}},
+    {...original,turns:[{id:"new-turn",agentId:""}]},
+    {...original,state:"running"},
+    {...original,activity:{...original.activity,details:{...original.activity.details,steer:{message:"中".repeat(342)}}}},
+  ];
+  for(const variant of variants)assert.equal(blockReview(variant).canContinue,false);
+  assert.notEqual(blockReview(original).key,blockReview({...original,activity:{...original.activity,reviewId:"updated"}}).key);
+  assert.equal(blockReview({...original,allowControl:false}).canContinue,true,"read-only controls are disabled separately from native capability");
+});
+
+test("blocked card escapes native material, starts without acknowledgement and gives an actual session switch",()=>{
+  const original=blockedSession(),html=blockedHtml(original,true,false);
+  assert(!html.includes("<script>"));assert(html.includes("&lt;script&gt;"));
+  assert(html.includes("data-block-acknowledge"));assert(!html.includes(" checked"));
+  assert(html.includes("data-block-continue disabled"));assert(html.includes('data-open="sessions"'));
+  const historical=blockedHtml({...original,activity:{kind:"blocked",message:original.activity.message}},true,false);
+  assert(!historical.includes("data-block-continue"));assert(!historical.includes("等待电脑端处理"));
+  assert(historical.includes(original.activity.message));
+});
+
+test("safety block and live review survive browser replay and clear only with the accepted next turn",()=>{
+  const original=blockedSession();original.seq=4;
+  const snapshot=JSON.parse(JSON.stringify(original));assert.equal(blockReview(snapshot).key,blockReview(original).key);
+  const pending=applyChanges(original,[{seq:5,events:[{type:"activity",value:{...original.activity,continuationStatus:"submitted"}}]}]);
+  assert.equal(blockReview(pending).canContinue,false);assert.equal(pending.state,"blocked");
+  const running=applyChanges(pending,[{seq:6,events:[{type:"activity",value:{}},{type:"state",state:"running",turnId:"new-turn"}]}]);
+  assert.equal(running.state,"running");assert.deepEqual(running.activity,{});
+});
+
+test("native turn ending and browser-only reattachment cannot enable a blocked session",()=>{
+  const original=blockedSession();original.turns=[{id:"turn",agentId:"",state:"inProgress"}];
+  assert.equal(blockReview(original).canContinue,false);
+  assert(blockedHtml(original,true,false).includes("等待原生结束当前回合"));
+  const attached=applyChanges({...original,seq:4},[{seq:5,events:[{type:"ready",sessionId:original.sessionId,model:"a",models:[],capabilities:{send:true}}]}]);
+  assert.equal(attached.state,"blocked");assert.equal(attached.activity.reviewId,original.activity.reviewId);
 });

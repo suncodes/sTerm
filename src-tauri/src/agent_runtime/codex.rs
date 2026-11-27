@@ -19,21 +19,32 @@ pub struct Client {
 }
 
 pub fn item(value: &Value, turn: &str) -> Option<Item> {
-    let kind = value["type"].as_str()?;
-    let (kind, title, text) = match kind {
+    let native_kind = value["type"].as_str()?;
+    let (kind, title, text) = match native_kind {
         "userMessage" => ("user", String::new(), value["content"].as_array()?.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n")),
         "agentMessage" => ("assistant", String::new(), value["text"].as_str().unwrap_or_default().into()),
-        "reasoning" => ("thinking", "思考摘要".into(), value["summary"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n")).unwrap_or_default()),
-        "plan" => ("assistant", "计划".into(), value["text"].as_str().unwrap_or_default().into()),
+        "reasoning" => ("thinking", "思考摘要".into(), mapping::reasoning_text(value)),
+        "plan" => ("plan", "计划".into(), value["text"].as_str().unwrap_or_default().into()),
         "commandExecution" => ("tool", "命令执行".into(), format!("{}\n\n{}", value["command"].as_str().unwrap_or_default(), value["aggregatedOutput"].as_str().unwrap_or_default())),
-        "fileChange" => ("tool", "文件变更".into(), serde_json::to_string_pretty(&value["changes"]).unwrap_or_default()),
-        "collabAgentToolCall" | "subAgentActivity" => ("tool", "协作任务".into(), serde_json::to_string_pretty(value).unwrap_or_default()),
-        "mcpToolCall" | "dynamicToolCall" => ("tool", value["tool"].as_str().unwrap_or("工具").into(), serde_json::to_string_pretty(value).unwrap_or_default()),
-        "functionCallOutput" => ("tool", value["name"].as_str().unwrap_or("工具").into(), serde_json::to_string_pretty(&value["output"]).unwrap_or_default()),
-        _ => return None,
+        "fileChange" => ("tool", "文件变更".into(), String::new()),
+        "collabAgentToolCall" | "subAgentActivity" => ("tool", "协作任务".into(), value["prompt"].as_str().unwrap_or_default().into()),
+        "mcpToolCall" | "dynamicToolCall" => ("tool", value["tool"].as_str().unwrap_or("工具").into(), mapping::tool_output(value)),
+        "functionCallOutput" => ("tool", value["name"].as_str().unwrap_or("工具").into(), mapping::tool_output(value)),
+        "webSearch" => ("tool", "搜索网页".into(), value["query"].as_str().or(value["action"]["query"].as_str()).unwrap_or_default().into()),
+        "imageView" => ("image", "查看图片".into(), value["path"].as_str().unwrap_or_default().into()),
+        "imageGeneration" => ("image", "生成图片".into(), value["revisedPrompt"].as_str().unwrap_or_default().into()),
+        "sleep" => ("activity", "等待".into(), format!("{} ms",value["durationMs"])),
+        "enteredReviewMode" => ("activity", "开始审查".into(), value["review"].as_str().unwrap_or_default().into()),
+        "exitedReviewMode" => ("activity", "审查结果".into(), value["review"].as_str().unwrap_or_default().into()),
+        "contextCompaction" => ("activity", "压缩上下文".into(), String::new()),
+        "hookPrompt" => ("activity", "Hook 上下文".into(), value["fragments"].as_array().into_iter().flatten().filter_map(|fragment|fragment["text"].as_str()).collect::<Vec<_>>().join("\n")),
+        _ => ("activity", format!("原生记录 · {native_kind}"), String::new()),
     };
+    let mut data=value.clone();
+    if let Some(fields)=data.as_object_mut(){fields.remove("aggregatedOutput");fields.remove("text");}
+    if serde_json::to_vec(&data).is_ok_and(|bytes|bytes.len()>240*1024){data=json!({"type":native_kind,"truncated":true,"path":value["path"],"savedPath":value["savedPath"]});}
     Some(Item { id: value["id"].as_str()?.into(), kind: kind.into(), title, text,
-        status: value["status"].as_str().unwrap_or("completed").into(), turn_id: turn.into(), agent_id: String::new() })
+        status: value["status"].as_str().unwrap_or("completed").into(), turn_id: turn.into(), agent_id: String::new(),data })
 }
 
 fn settings(value: &Value) -> Event {
@@ -184,6 +195,29 @@ impl Client {
         Ok(())
     }
 
+    async fn continue_blocked(&self, thread:&str, command:&Command, turn:&str, review:&str)->Result<(),String> {
+        let session=self.hub.snapshot(&command.runtime_id,false)?;
+        if session.state!="blocked" || session.turns.iter().rev().find(|entry|entry["agentId"].as_str().unwrap_or_default().is_empty()).is_some_and(|entry|entry["id"]!=turn) {
+            return Err("阻断回合已变化，请重新查看当前状态".into());
+        }
+        let params=super::codex_block::params(thread,&session.activity,turn,review)?;
+        match self.call("turn/start",params).await {
+            Ok(_)=>Ok(()),
+            Err(error)=>{
+                let rejected=serde_json::from_str::<Value>(&error).is_ok_and(|value|value["code"].is_i64());
+                if rejected {
+                    if let Ok(current)=self.hub.snapshot(&command.runtime_id,false) {
+                        if current.state=="blocked" && current.activity["turnId"]==turn && current.activity["reviewId"]==review {
+                            let mut activity=current.activity;activity["reviewId"]=json!(uuid::Uuid::new_v4().to_string());activity["continuationStatus"]=json!("rejected");
+                            let _=self.hub.apply(&command.runtime_id,thread,vec![Event::Activity{value:activity}]);
+                        }
+                    }
+                }
+                Err(if rejected{"原生未接受继续请求，请重新查看最新说明后再决定"}else{"继续请求的结果尚未确认，请等待原生状态；不会重复发送"}.into())
+            }
+        }
+    }
+
     async fn release_thread(&self, thread: &str) -> Result<(), String> {
         let turns = self.call("thread/turns/list", json!({"threadId":thread,"limit":1,"sortDirection":"desc"})).await?;
         for turn in turns["data"].as_array().into_iter().flatten().filter(|turn| turn["status"] == "inProgress") {
@@ -208,9 +242,9 @@ impl Client {
         if let Ok(turns) = self.call("thread/turns/list", json!({"threadId":thread,"limit":1,"sortDirection":"desc"})).await {
             if let Some(turn) = turns["data"].as_array().and_then(|rows| rows.first()) {
                 let (state,activity)=if turn["status"]=="inProgress"{("running",json!({}))}else{mapping::terminal_state(turn)};
-                let mut events=vec![Event::Activity{value:activity},Event::State{state:state.into(),turn_id:if state=="running"{turn["id"].as_str().unwrap_or_default().into()}else{String::new()}}];
+                let mut events=vec![Event::Turn{value:super::presentation::turn(turn,"")},Event::Activity{value:activity},Event::State{state:state.into(),turn_id:if state=="running"{turn["id"].as_str().unwrap_or_default().into()}else{String::new()}}];
                 if state!="running"{
-                    for interaction in self.hub.snapshot(runtime,false)?.interactions.into_iter().filter(|i|i.agent_id.is_empty()&&i.kind=="asyncQuestion"){events.push(Event::Resolved{id:interaction.id});}
+                    for interaction in self.hub.snapshot(runtime,false)?.interactions.into_iter().filter(|i|i.agent_id.is_empty()&&i.kind!="asyncQuestion"){events.push(Event::Resolved{id:interaction.id});}
                 }
                 self.hub.apply(runtime,thread,events)?;
             }
@@ -221,6 +255,7 @@ impl Client {
         self.hub.claim(&command.runtime_id, command)?;
         match &command.action {
             Action::SendText { text } => { self.call("turn/start", json!({"threadId":thread,"input":[{"type":"text","text":text}]})).await?; }
+            Action::ContinueBlocked { turn_id, review_id } => { self.continue_blocked(thread,command,turn_id,review_id).await?; }
             Action::StopTurn { turn_id } => { self.call("turn/interrupt", json!({"threadId":thread,"turnId":turn_id})).await?; }
             Action::SetModel { model } => {
                 self.call("thread/settings/update", json!({"threadId":thread,"model":model})).await?;
@@ -278,11 +313,14 @@ impl Client {
         if let Ok(history) = self.call("thread/items/list", json!({"threadId":thread,"limit":300,"sortDirection":"desc"})).await {
             let mut rows: Vec<_> = history["data"].as_array().into_iter().flatten().filter_map(|entry| item(&entry["item"], entry["turnId"].as_str().unwrap_or_default())).collect();
             rows.reverse();
+            let mut resolved=rows.iter().filter_map(super::presentation::command_task).map(|task|Event::Task{task}).collect::<Vec<_>>();
             let _ = self.hub.apply(runtime, thread, vec![Event::Items { items: rows }]);
-            let mut resolved=vec![];
             for entry in history["data"].as_array().into_iter().flatten(){
-                if entry["item"]["type"]=="userMessage"{self.resolve_async_answers(thread,&entry["item"],&mut resolved);}
+                if entry["item"]["type"]=="agentMessage"&&entry["item"]["delivery"]=="async" {self.async_questions(thread,entry["turnId"].as_str().unwrap_or_default(),"",&entry["item"],&mut resolved);}
             }
+            if !resolved.is_empty(){let _=self.hub.apply(runtime,thread,resolved);}
+            let mut resolved=vec![];
+            for entry in history["data"].as_array().into_iter().flatten(){if entry["item"]["type"]=="userMessage"{self.resolve_async_answers(thread,&entry["item"],&mut resolved);}}
             if !resolved.is_empty(){let _=self.hub.apply(runtime,thread,resolved);}
         }
     }
@@ -304,46 +342,79 @@ impl Client {
             return;
         }
         let thread=p["threadId"].as_str().unwrap_or_default();
+        if thread.is_empty() {
+            if let Some(id)=value.get("id") {
+                let _=self.tx.try_send(json!({"id":id,"error":{"code":-32601,"message":"sTerm does not implement this host callback"}}));
+            } else if let Some(notice)=mapping::notice(method,p,"") {
+                let roots:HashSet<_>=self.bindings.lock().unwrap().values().cloned().collect();
+                for (runtime,root) in roots {let _=self.hub.apply(&runtime,&root,vec![Event::Notice{value:notice.clone()}]);}
+            }
+            return;
+        }
         let binding=self.bindings.lock().unwrap().get(thread).cloned();
         let Some((runtime,root))=binding else{return};
         let agent=if thread==root{""}else{thread};
         let turn=p["turnId"].as_str().unwrap_or_default();
+        let event_turn=p["turn"]["id"].as_str().unwrap_or(turn);
+        if agent.is_empty() && matches!(method,"error"|"turn/completed") && !event_turn.is_empty() {
+            if let Ok(session)=self.hub.snapshot(&runtime,false) {
+                if session.turns.iter().rev().find(|entry|entry["agentId"].as_str().unwrap_or_default().is_empty()).is_some_and(|entry|entry["id"]!=event_turn) { return; }
+            }
+        }
         let mut events=vec![];
         if value.get("id").is_some(){
+            if method=="item/tool/call" {
+                let _=self.tx.try_send(json!({"id":value["id"],"result":{"success":false,"contentItems":[{"type":"inputText","text":"sTerm does not implement this dynamic tool. No action was executed."}]}}));
+                events.push(Event::Notice{value:json!({"id":format!("unsupported:{}",value["id"]),"agentId":agent,"title":"工具调用未执行","message":"当前客户端未实现此动态工具，已向 Codex 返回失败。","severity":"warning"})});
+            } else {
             let id=format!("{thread}:{}",value["id"]);
             if let Some(interaction)=mapping::request(method,&id,p,agent){
                 self.approvals.lock().unwrap().entry(id).or_insert(PendingApproval{native_id:value["id"].clone(),params:p.clone(),interaction:interaction.clone(),waiter:None,sent:false});
                 events.push(Event::Interaction{interaction});
+            } else {
+                let _=self.tx.try_send(json!({"id":value["id"],"error":{"code":-32601,"message":"sTerm does not implement this host callback"}}));
+            }
             }
         } else {
             match method {
                 "turn/started"=>{
+                    events.push(Event::Turn{value:super::presentation::turn(&p["turn"],agent)});
                     let turn=p["turn"]["id"].as_str().unwrap_or_default();
                     if agent.is_empty(){events.push(Event::Activity{value:json!({})});events.push(Event::State{state:"running".into(),turn_id:turn.into()});}
-                    else{events.push(Event::Task{task:self.task_state(&runtime,agent,"running",turn,"")});}
+                    else{let mut task=self.task_state(&runtime,agent,"running",turn,"");super::presentation::merge(&mut task.data,&super::presentation::turn(&p["turn"],agent));events.push(Event::Task{task});}
                 }
                 "turn/completed"=>{
-                    let (state,activity)=mapping::terminal_state(&p["turn"]);
+                    events.push(Event::Turn{value:super::presentation::turn(&p["turn"],agent)});
+                    let previous=self.hub.snapshot(&runtime,false).map(|session|session.activity).unwrap_or(Value::Null);
+                    let (state,activity)=mapping::terminal_state_live(&p["turn"],&previous);
                     let pending:Vec<_>=self.approvals.lock().unwrap().iter().filter(|(id,r)|id.starts_with(&format!("{thread}:"))&&(r.interaction.turn_id.is_empty()||r.interaction.turn_id==p["turn"]["id"])).map(|(id,_)|id.clone()).collect();
                     for id in pending{self.approvals.lock().unwrap().remove(&id);events.push(Event::Resolved{id});}
                     if let Ok(session)=self.hub.snapshot(&runtime,false){
-                        for i in session.interactions.into_iter().filter(|i|i.agent_id==agent&&i.turn_id==p["turn"]["id"]){
+                        for i in session.interactions.into_iter().filter(|i|i.agent_id==agent&&i.turn_id==p["turn"]["id"]&&(i.kind!="asyncQuestion"||state=="blocked")){
                             events.push(Event::Resolved{id:i.id});
                         }
                     }
                     if agent.is_empty(){events.push(Event::Activity{value:activity});events.push(Event::State{state:state.into(),turn_id:String::new()});}
-                    else{events.push(Event::Task{task:self.task_state(&runtime,agent,if state=="idle"{"completed"}else{state},"",activity["message"].as_str().unwrap_or_default())});}
+                    else{let mut task=self.task_state(&runtime,agent,if state=="idle"{"completed"}else{state},"",activity["message"].as_str().unwrap_or_default());super::presentation::merge(&mut task.data,&super::presentation::turn(&p["turn"],agent));events.push(Event::Task{task});}
                 }
                 "item/started"|"item/completed"=>{
                     let native=&p["item"];
-                    if let Some(mut item)=mapping::scoped_item(native,turn,agent){if method=="item/started"{item.status="running".into();}events.push(Event::Upsert{item});}
+                    if let Some(mut item)=mapping::scoped_item(native,turn,agent){
+                        if method=="item/started"{item.status="running".into();}
+                        if let Some(task)=super::presentation::command_task(&item){events.push(Event::Task{task});}
+                        events.push(Event::Upsert{item});
+                    }
                     self.track_collaboration(&runtime,&root,thread,native,&mut events);
                     if native["type"]=="agentMessage"&&native["delivery"]=="async"{self.async_questions(thread,turn,agent,native,&mut events);}
                     if native["type"]=="userMessage"{self.resolve_async_answers(thread,native,&mut events);}
                 }
-                "item/agentMessage/delta"|"item/commandExecution/outputDelta"=>{
+                "item/agentMessage/delta"|"item/commandExecution/outputDelta"|"item/plan/delta"=>{
                     let id=p["itemId"].as_str().unwrap_or_default();
-                    events.push(Event::Delta{id:if agent.is_empty(){id.into()}else{format!("{agent}:{id}")},delta:p["delta"].as_str().unwrap_or_default().into()});
+                    let scoped=if agent.is_empty(){id.into()}else{format!("{agent}:{id}")};
+                    if !self.hub.snapshot(&runtime,false).is_ok_and(|session|session.items.iter().any(|item|item.id==scoped)) {
+                        events.push(Event::Upsert{item:Item{id:scoped.clone(),kind:if method.contains("commandExecution"){"tool"}else if method.contains("/plan/"){"plan"}else{"assistant"}.into(),status:"running".into(),turn_id:turn.into(),agent_id:agent.into(),..Default::default()}});
+                    }
+                    events.push(Event::Delta{id:scoped,delta:p["delta"].as_str().unwrap_or_default().into()});
                     if agent.is_empty() { if self.hub.snapshot(&runtime,false).is_ok_and(|s|s.state=="retrying"){events.push(Event::State{state:"running".into(),turn_id:turn.into()});events.push(Event::Activity{value:json!({})});} }
                 }
                 "thread/settings/updated" if agent.is_empty()=>{
@@ -357,16 +428,24 @@ impl Client {
                     let client=self.clone();let runtime=runtime.clone();let root=root.clone();
                     tokio::spawn(async move{client.refresh_queue(&runtime,&root).await;});
                 }
+                "thread/reverted" if agent.is_empty()=>{let client=self.clone();let runtime=runtime.clone();let root=root.clone();tokio::spawn(async move{client.refresh(&runtime,&root).await;});}
                 "thread/status/changed"=>{
                     let status=&p["status"];
                     if !agent.is_empty(){
                         let state=match status["type"].as_str(){Some("active")=>if status["activeFlags"].as_array().is_some_and(|f|!f.is_empty()){"waiting"}else{"running"},Some("systemError")=>"failed",Some("idle")=>"idle",_=>"unknown"};
                         events.push(Event::Task{task:self.task_state(&runtime,agent,state,"","")});
+                    } else if status["type"]=="active" {
+                        let waiting=status["activeFlags"].as_array().is_some_and(|flags|!flags.is_empty());
+                        events.push(Event::State{state:if waiting{"waiting"}else{"running"}.into(),turn_id:self.hub.snapshot(&runtime,false).map(|s|s.turn_id).unwrap_or_default()});
                     }
                 }
                 "thread/closed"=>{
                     if agent.is_empty(){events.push(Event::State{state:"offline".into(),turn_id:String::new()});}
-                    else{events.push(Event::Task{task:self.task_state(&runtime,agent,"completed","","子线程已关闭")});}
+                    else{
+                        let previous=self.task_state(&runtime,agent,"unknown","","子线程连接已关闭，结果以原生终态为准");
+                        let task=self.hub.snapshot(&runtime,false).ok().and_then(|s|s.tasks.into_iter().find(|task|task.id==agent&&["completed","failed","interrupted","killed"].contains(&task.state.as_str()))).unwrap_or(previous);
+                        events.push(Event::Task{task});
+                    }
                 }
                 "serverRequest/resolved"=>{
                     let id=format!("{thread}:{}",p["requestId"]);
@@ -374,13 +453,25 @@ impl Client {
                     events.push(Event::Resolved{id});
                 }
                 "error"=>{
-                    let retry=p["willRetry"]==true;
-                    let state=if retry{"retrying"}else{"failed"};
-                    let activity=json!({"kind":state,"message":p["error"]["message"],"code":p["error"]["codexErrorInfo"]});
-                    if agent.is_empty(){events.push(Event::Activity{value:activity});events.push(Event::State{state:state.into(),turn_id:turn.into()});}
-                    else{events.push(Event::Task{task:self.task_state(&runtime,agent,state,turn,activity["message"].as_str().unwrap_or_default())});}
+                    let session=self.hub.snapshot(&runtime,false).ok();
+                    let blocked=super::codex_block::is_block(&p["error"]);
+                    if agent.is_empty() && !blocked && session.as_ref().is_some_and(|session|session.activity["kind"]=="blocked") {
+                        events.push(Event::Notice{value:json!({"id":format!("blocked-error:{turn}"),"title":"原生运行提示","message":p["error"]["message"],"severity":"warning"})});
+                    } else {
+                        let state=if blocked{"blocked"}else if p["willRetry"]==true{"retrying"}else{"failed"};
+                        let previous=session.as_ref().map(|session|&session.activity).unwrap_or(&Value::Null);
+                        let activity=if blocked{super::codex_block::activity(turn,&p["error"],previous,true)}else{json!({"kind":state,"message":p["error"]["message"],"code":p["error"]["codexErrorInfo"]})};
+                        if agent.is_empty(){events.push(Event::Activity{value:activity});events.push(Event::State{state:state.into(),turn_id:turn.into()});}
+                        else{events.push(Event::Task{task:self.task_state(&runtime,agent,state,turn,activity["message"].as_str().unwrap_or_default())});}
+                    }
                 }
-                _=>{}
+                _=>{
+                    let scoped=if agent.is_empty(){p["itemId"].as_str().unwrap_or_default().to_owned()}else{format!("{agent}:{}",p["itemId"].as_str().unwrap_or_default())};
+                    let existing=self.hub.snapshot(&runtime,false).ok().and_then(|session|session.items.into_iter().find(|item|item.id==scoped));
+                    if let Some(item)=mapping::incremental_item(method,p,turn,agent,existing){events.push(Event::Upsert{item});if agent.is_empty()&&self.hub.snapshot(&runtime,false).is_ok_and(|s|s.state=="retrying"){events.push(Event::State{state:"running".into(),turn_id:turn.into()});events.push(Event::Activity{value:json!({})});}}
+                    if let Some(event)=mapping::passive_event(method,p,agent){events.push(event);}
+                    if let Some(notice)=mapping::notice(method,p,agent){events.push(Event::Notice{value:notice});}
+                }
             }
         }
         if !events.is_empty(){let _=self.hub.apply(&runtime,&root,events);}
@@ -440,7 +531,8 @@ impl Client {
 
     fn task_state(&self,runtime:&str,agent:&str,state:&str,turn:&str,message:&str)->AgentTask{
         let mut task=self.hub.snapshot(runtime,false).ok().and_then(|s|s.tasks.into_iter().find(|t|t.id==agent)).unwrap_or_else(||AgentTask{id:agent.into(),title:"子 Agent".into(),..Default::default()});
-        task.state=state.into();task.turn_id=turn.into();task.message=message.chars().take(2000).collect();task
+        task.state=state.into();task.turn_id=turn.into();task.message=message.chars().take(2000).collect();
+        if task.kind.is_empty(){task.kind="agent".into();}task
     }
 
     fn attach_child(self:&Arc<Self>,runtime:String,root:String,child:String){
@@ -456,7 +548,7 @@ impl Client {
                 match client.call("thread/resume",json!({"threadId":child,"excludeTurns":true})).await{
                     Ok(response)=>{
                         error=None;
-                        let state=match response["thread"]["status"]["type"].as_str(){Some("idle")=>"completed",Some("active")=>"running",Some("systemError")=>"failed",_=>"unknown"};
+                        let state=match response["thread"]["status"]["type"].as_str(){Some("idle")=>"idle",Some("active")=>"running",Some("systemError")=>"failed",_=>"unknown"};
                         let task=client.task_state(&runtime,&child,state,"","");
                         let _=client.hub.apply(&runtime,&root,vec![Event::Task{task}]);break;
                     }
@@ -555,6 +647,16 @@ mod tests {
         (client,rx,runtime)
     }
     #[tokio::test]
+    async fn all_native_items_keep_content_and_dynamic_tool_callbacks_fail_without_hanging() {
+        for kind in ["userMessage","hookPrompt","agentMessage","functionCallOutput","plan","reasoning","commandExecution","fileChange","mcpToolCall","dynamicToolCall","collabAgentToolCall","subAgentActivity","webSearch","imageView","sleep","imageGeneration","enteredReviewMode","exitedReviewMode","contextCompaction"] {
+            let mapped=item(&json!({"id":"item","type":kind,"content":[],"changes":[{"path":"a"}],"startedAtMs":100,"completedAtMs":200}),"turn").unwrap();
+            assert_eq!(mapped.data["type"],kind);assert_eq!(mapped.data["startedAtMs"],100);
+        }
+        let(client,mut rx,runtime)=fixture();
+        client.notification(json!({"id":9,"method":"item/tool/call","params":{"threadId":"root","turnId":"turn","tool":"unknown"}}));
+        let wire=rx.recv().await.unwrap();assert_eq!(wire["result"]["success"],false);assert!(client.hub.snapshot(&runtime,false).unwrap().interactions.is_empty());
+    }
+    #[tokio::test]
     async fn async_item_identity_deduplicates_and_another_clients_answer_closes_the_card(){
         let(client,_rx,runtime)=fixture();
         let item=json!({"type":"agentMessage","id":"async-item","delivery":"async","text":"","questions":[{"title":"Pick?","options":["A","B"]}]});
@@ -581,5 +683,88 @@ mod tests {
         let wire=rx.recv().await.unwrap();assert_eq!(wire["id"],77);assert_eq!(wire["result"],json!({"answers":{"q":{"answers":["A"]}}}));
         client.notification(json!({"method":"serverRequest/resolved","params":{"threadId":"child","requestId":77}}));
         assert!(response.await.unwrap().is_ok());assert!(client.hub.snapshot(&runtime,false).unwrap().interactions.is_empty());
+    }
+    fn block_error()->Value {
+        json!({"codexErrorInfo":"misalignmentPolicyViolation","message":"This request was blocked by our safety systems. Reason: Potentially unintended activity.","misalignment":{"detailedExplanation":"Review this detected action before continuing.","steer":{"message":"Continue within the requested scope only."},"reviewTarget":"opaque"}})
+    }
+    fn block_notification(client:&Arc<Client>,error:Value) {
+        client.notification(json!({"method":"error","params":{"threadId":"root","turnId":"turn","willRetry":false,"error":error}}));
+    }
+    fn continuation(client:&Client,runtime:&str,id:&str)->Command {
+        let s=client.hub.snapshot(runtime,false).unwrap();
+        Command{id:id.into(),runtime_id:runtime.into(),generation:2,session_id:"root".into(),settings_revision:None,
+            action:Action::ContinueBlocked{turn_id:"turn".into(),review_id:s.activity["reviewId"].as_str().unwrap().into()}}
+    }
+    #[tokio::test]
+    async fn live_safety_review_survives_terminal_duplicates_and_continues_once_with_native_input() {
+        let(client,mut rx,runtime)=fixture();client.hub.share(&runtime,2,true,true).unwrap();
+        client.notification(json!({"method":"turn/started","params":{"threadId":"root","turn":{"id":"turn","status":"inProgress"}}}));
+        block_notification(&client,block_error());
+        let first=client.hub.snapshot(&runtime,false).unwrap();assert_eq!(first.state,"blocked");
+        let mut duplicate=block_error();duplicate.as_object_mut().unwrap().remove("misalignment");
+        client.notification(json!({"method":"turn/completed","params":{"threadId":"root","turn":{"id":"turn","status":"failed","error":duplicate}}}));
+        let completed=client.hub.snapshot(&runtime,false).unwrap();
+        assert_eq!(completed.activity["reviewId"],first.activity["reviewId"]);
+        assert!(completed.turns[0]["error"].get("misalignment").is_none());
+        let a=continuation(&client,&runtime,"continue-a");
+        client.hub.submit(a.clone(),true).unwrap();client.hub.submit(a.clone(),true).unwrap();
+        assert_eq!(client.hub.commands(&runtime).len(),1);
+        let worker=client.clone();let copy=a.clone();let dispatch=tokio::spawn(async move{worker.execute("root",&copy).await});
+        let wire=rx.recv().await.unwrap();assert_eq!(wire["method"],"turn/start");
+        assert_eq!(wire["params"]["threadId"],"root");assert_eq!(wire["params"]["input"][0]["text"],block_error()["misalignment"]["steer"]["message"]);
+        assert!(wire["params"]["responsesapiClientMetadata"]["misalignment_override"].is_string());
+        let mut b=a.clone();b.id="continue-b".into();assert!(client.hub.submit(b,true).is_err());
+        let async_request=Interaction{id:"old-question".into(),kind:"asyncQuestion".into(),blocking:false,data:json!({"questions":[{"id":"q"}]}),..Default::default()};
+        client.hub.apply(&runtime,"root",vec![Event::Interaction{interaction:async_request}]).unwrap();
+        let mut bypass=a.clone();bypass.id="old-answer".into();bypass.action=Action::RespondInteraction{request_id:"old-question".into(),response:json!({"answers":{"q":["continue"]}})};
+        assert!(client.hub.submit(bypass,true).is_err());
+        let id=wire["id"].as_u64().unwrap();client.waiters.lock().unwrap().remove(&id).unwrap().send(Ok(json!({"turn":{"id":"new-turn","status":"inProgress"}}))).unwrap();
+        assert!(dispatch.await.unwrap().is_ok());assert_eq!(client.hub.snapshot(&runtime,false).unwrap().state,"blocked");
+        client.notification(json!({"method":"turn/started","params":{"threadId":"root","turn":{"id":"new-turn","status":"inProgress"}}}));
+        block_notification(&client,block_error());
+        let current=client.hub.snapshot(&runtime,false).unwrap();assert_eq!(current.state,"running");assert!(current.activity["reviewId"].is_null());
+    }
+    #[tokio::test]
+    async fn withdrawn_findings_revoke_queued_confirmation_and_rpc_rejections_require_fresh_review() {
+        let(client,mut rx,runtime)=fixture();client.hub.share(&runtime,2,true,true).unwrap();block_notification(&client,block_error());
+        let stale=continuation(&client,&runtime,"stale");client.hub.submit(stale.clone(),true).unwrap();client.hub.commands(&runtime);
+        let mut withdrawn=block_error();withdrawn["misalignment"]["detailedExplanation"]=Value::Null;block_notification(&client,withdrawn);
+        assert!(client.execute("root",&stale).await.is_err());assert!(rx.try_recv().is_err());
+        block_notification(&client,block_error());let valid=continuation(&client,&runtime,"valid");client.hub.submit(valid.clone(),true).unwrap();client.hub.commands(&runtime);
+        let old_review=client.hub.snapshot(&runtime,false).unwrap().activity["reviewId"].clone();
+        let worker=client.clone();let copy=valid.clone();let dispatch=tokio::spawn(async move{worker.execute("root",&copy).await});
+        let wire=rx.recv().await.unwrap();
+        client.waiters.lock().unwrap().remove(&wire["id"].as_u64().unwrap()).unwrap().send(Err(json!({"code":-32000,"message":"private steer should not reach the browser"}).to_string())).unwrap();
+        let result=dispatch.await.unwrap().unwrap_err();assert!(!result.contains("private steer"));
+        let current=client.hub.snapshot(&runtime,false).unwrap();assert_eq!(current.state,"blocked");assert_ne!(current.activity["reviewId"],old_review);
+        assert_eq!(current.activity["continuationStatus"],"rejected");
+        let mut missing=block_error();missing.as_object_mut().unwrap().remove("misalignment");block_notification(&client,missing);
+        assert_eq!(client.hub.snapshot(&runtime,false).unwrap().activity["reviewId"],current.activity["reviewId"]);
+    }
+    #[test]
+    fn history_only_blocks_and_native_disconnect_cannot_recreate_continuation_materials() {
+        let(client,_rx,runtime)=fixture();block_notification(&client,block_error());
+        let original=client.hub.snapshot(&runtime,false).unwrap();let mut action=continuation(&client,&runtime,"readonly");
+        assert!(client.hub.submit(action.clone(),true).is_err());client.hub.share(&runtime,2,true,true).unwrap();
+        client.hub.disconnect(&runtime);let offline=client.hub.snapshot(&runtime,false).unwrap();assert!(offline.activity["details"].is_null());assert!(offline.activity["reviewId"].is_null());
+        let (_,history)=mapping::terminal_state(&json!({"id":"turn","status":"failed","error":block_error()}));
+        client.hub.apply(&runtime,"root",vec![Event::Activity{value:history},Event::State{state:"blocked".into(),turn_id:String::new()}]).unwrap();
+        if let Action::ContinueBlocked{ref mut review_id,..}=action.action{*review_id=original.activity["reviewId"].as_str().unwrap().into();}
+        assert!(client.hub.submit(action,true).is_err());
+    }
+    #[tokio::test]
+    async fn unknown_continuation_result_never_reenables_retry_and_terminal_blocks_close_old_async_questions() {
+        let(client,mut rx,runtime)=fixture();client.hub.share(&runtime,2,true,true).unwrap();
+        block_notification(&client,block_error());
+        let request=Interaction{id:"async".into(),turn_id:"turn".into(),kind:"asyncQuestion".into(),blocking:false,data:json!({"questions":[{"id":"q"}]}),..Default::default()};
+        client.hub.apply(&runtime,"root",vec![Event::Interaction{interaction:request}]).unwrap();
+        client.notification(json!({"method":"turn/completed","params":{"threadId":"root","turn":{"id":"turn","status":"failed","error":{"codexErrorInfo":"misalignmentPolicyViolation","message":"Blocked"}}}}));
+        assert!(client.hub.snapshot(&runtime,false).unwrap().interactions.is_empty());
+        let action=continuation(&client,&runtime,"unknown-result");client.hub.submit(action.clone(),true).unwrap();client.hub.commands(&runtime);
+        let worker=client.clone();let copy=action.clone();let dispatch=tokio::spawn(async move{worker.execute("root",&copy).await});
+        let wire=rx.recv().await.unwrap();client.waiters.lock().unwrap().remove(&wire["id"].as_u64().unwrap()).unwrap().send(Err("Codex operation result unknown".into())).unwrap();
+        assert!(dispatch.await.unwrap().unwrap_err().contains("结果尚未确认"));
+        let mut retry=action;retry.id="retry".into();assert!(client.hub.submit(retry,true).is_err());
+        assert_eq!(client.hub.snapshot(&runtime,false).unwrap().activity["continuationStatus"],"submitted");
     }
 }

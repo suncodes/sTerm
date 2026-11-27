@@ -15,6 +15,7 @@
     <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
     <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
     <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M9 3H3v6m12-6h6v6M3 15v6h6m12-6v6h-6"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
     <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
     <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></symbol>
@@ -46,7 +47,11 @@
     <div id="agent-notice" class="operation-error" role="status" hidden><svg class="icon"><use href="#i-alert"/></svg><span id="notice-text"></span><button id="dismiss-notice" class="touch-button" aria-label="关闭提示"><svg class="icon"><use href="#i-close"/></svg></button></div>
     <section id="conversation" class="conversation" aria-label="Agent 会话内容"><div id="agent-messages" class="messages" role="log" aria-live="off"></div><div id="agent-empty" class="empty-conversation" hidden><svg class="icon"><use href="#i-monitor"/></svg><h2>还没有共享的 Agent 会话</h2><p>在电脑端 sTerm 终端中使用已启用接入的 Claude 或 Codex，会话会自动显示在这里。</p><small>可访问的会话由电脑端分享设置决定</small></div></section>
     <section id="interaction-dock" class="approval-dock" aria-label="待处理交互" hidden></section>
-    <div id="task-bar" class="queue-bar" hidden><span id="task-text"></span><button data-open="tasks">查看子任务</button></div>
+    <section id="interaction-card" class="interaction-card" aria-label="当前待处理交互" hidden></section>
+    <section id="blocked-card" class="interaction-card blocked-card" aria-label="安全阻断处理" hidden></section>
+    <div id="task-bar" class="queue-bar" hidden><span id="task-text"></span><button data-open="tasks">查看任务</button></div>
+    <div id="native-notice" class="native-notice" hidden><span id="native-notice-text"></span><button data-open="notices">详情</button></div>
+    <div id="usage-summary" class="usage-summary" hidden></div>
     <div id="agent-activity-detail" class="activity-detail" role="status" hidden></div>
     <section id="agent-approvals" class="approval-dock" aria-label="工具审批" hidden></section>
     <div id="activity-bar" class="activity-bar"><span id="activity-dot" class="status-dot"></span><span id="activity-text">等待会话</span><button id="agent-stop" class="stop-button" disabled hidden><svg class="icon"><use href="#i-stop"/></svg>停止生成</button></div>

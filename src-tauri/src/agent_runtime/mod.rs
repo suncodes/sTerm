@@ -1,11 +1,14 @@
 //! Agent 模式运行时入口；与远程网页的启停解耦。
 pub mod protocol;
 mod interactions;
+mod presentation;
 pub(crate) mod hub;
 mod bridge;
 pub(crate) mod shell;
 mod codex;
 mod codex_mapping;
+mod codex_block;
+mod codex_events;
 pub(crate) mod launcher;
 pub mod web;
 #[cfg(debug_assertions)]

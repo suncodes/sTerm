@@ -1,8 +1,8 @@
-param([string]$ChromePath, [string]$Python="python", [switch]$KeepArtifacts, [switch]$FocusInteractions)
+param([string]$ChromePath, [string]$Python="python", [switch]$KeepArtifacts, [switch]$FocusInteractions, [switch]$BackgroundOnly, [switch]$SafetyOnly)
 $ErrorActionPreference="Stop"
 if($PSVersionTable.PSVersion.Major -lt 7){throw "请使用 PowerShell 7 (pwsh) 运行隔离验证。"}
 $workspace=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-if([IO.Path]::GetPathRoot($workspace) -eq "C:\"){throw "独立验证需要非 C 盘工作区。"}
+if(([IO.Path]::GetPathRoot($workspace)).StartsWith("C:\",[StringComparison]::OrdinalIgnoreCase)){throw "独立验证需要非 C 盘工作区。"}
 if(-not $ChromePath){
     $candidates=@("$env:LOCALAPPDATA/Google/Chrome/Application/chrome.exe","$env:ProgramFiles/Google/Chrome/Application/chrome.exe")
     $ChromePath=$candidates | Where-Object {Test-Path -LiteralPath $_ -PathType Leaf} | Select-Object -First 1
@@ -81,16 +81,24 @@ screen_reader_detection_done = true
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath "$task/tauri.agent-dev.conf.json" -Encoding UTF8
     Push-Location "$workspace"
     try{
-        & npm run tauri -- build --debug --no-bundle --config "$task/tauri.agent-dev.conf.json"
-        if($LASTEXITCODE){throw "独立调试版构建失败。"}
+        & npm run build
+        if($LASTEXITCODE){throw "网页构建失败。"}
+        $oldTauriConfig=$env:TAURI_CONFIG
+        try{
+            $env:TAURI_CONFIG=Get-Content -LiteralPath "$task/tauri.agent-dev.conf.json" -Encoding UTF8 -Raw
+            & cargo build --manifest-path "src-tauri/Cargo.toml" --profile agent-test
+            if($LASTEXITCODE){throw "独立调试版构建失败。"}
+        }finally{$env:TAURI_CONFIG=$oldTauriConfig}
+        Copy-Item -LiteralPath "$workspace/src-tauri/target/agent-test/sterm.exe" -Destination "$workspace/src-tauri/target/agent-test/sTerm-Agent-Dev.exe" -Force
     }finally{Pop-Location}
     $values=$baseEnv.Clone()
     $values.STERM_DEV_DATA_DIR="$task/appdata";$values.STERM_DEV_PROBE="1"
     $values.CODEX_HOME="$task/codex";$values.CLAUDE_CONFIG_DIR="$task/claude"
+    $values.CLAUDE_CODE_TMPDIR="$task/temp/claude"
     $values.ANTHROPIC_BASE_URL=$endpoint;$values.ANTHROPIC_API_KEY="sk-ant-sterm-mod-isolated-placeholder"
     $values.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1";$values.DISABLE_TELEMETRY="1";$values.DISABLE_ERROR_REPORTING="1";$values.DISABLE_AUTOUPDATER="1"
     $values.WEBVIEW2_USER_DATA_FOLDER="$task/webview";$values.APPDATA="$task/appdata";$values.LOCALAPPDATA="$task/localappdata"
-    $dev=Start-Isolated "$workspace/src-tauri/target/debug/sTerm-Agent-Dev.exe" @() $values
+    $dev=Start-Isolated "$workspace/src-tauri/target/agent-test/sTerm-Agent-Dev.exe" @() $values
     $deadline=[DateTime]::UtcNow.AddSeconds(25)
     while(-not(Test-Path -LiteralPath "$task/appdata/probe-ready")){
         if($dev.HasExited){throw "隔离应用已退出：$($dev.ExitCode)"}
@@ -102,6 +110,8 @@ screen_reader_detection_done = true
     }
     $browserArgs=@("-X","utf8","$PSScriptRoot/test-agent-browser.py",$task,$ChromePath)
     if($FocusInteractions){$browserArgs+="--focus-interactions"}
+    if($BackgroundOnly){$browserArgs+="--background-only"}
+    if($SafetyOnly){$browserArgs+="--safety-only"}
     & $Python @browserArgs
     if($LASTEXITCODE){throw "Chrome Agent 集成验证失败。"}
     $passed=$true
@@ -109,7 +119,7 @@ screen_reader_detection_done = true
     if($dev -and -not $dev.HasExited){
         try{Drive @{action="stop"}|Out-Null}catch{Write-Warning $_.Exception.Message}
         if(-not $dev.WaitForExit(10000)){
-            $expectedExe=[IO.Path]::GetFullPath("$workspace/src-tauri/target/debug/sTerm-Agent-Dev.exe")
+            $expectedExe=[IO.Path]::GetFullPath("$workspace/src-tauri/target/agent-test/sTerm-Agent-Dev.exe")
             if($dev.MainModule.FileName -ne $expectedExe){throw "进程路径不匹配，拒绝结束。"}
             $dev.Kill();$dev.WaitForExit()
         }

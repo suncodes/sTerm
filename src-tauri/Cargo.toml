@@ -43,3 +43,6 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 opt-level = "s"
 lto = true
 strip = true
+
+[profile.agent-test]
+inherits = "dev"

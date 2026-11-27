@@ -39,10 +39,10 @@ class Handler(BaseHTTPRequestHandler):
   for i,m in enumerate(messages):
    if m.get("role")!="user":continue
    c=m.get("content",[]);t=c if isinstance(c,str) else " ".join(x.get("text","") for x in c if x.get("type")=="text")
-   found=re.findall("APPROVAL_[A-Z]+|QUESTION_[A-Z]+|SUBAGENT_[A-Z]+|CHILD_[A-Z]+|LONG_[A-Z]+|WEB_[A-Z]+|LOCAL_[A-Z]+|RETRY_[A-Z]+|FAIL_[A-Z]+",t)
+   found=re.findall("APPROVAL_[A-Z]+|QUESTION_[A-Z]+|SUBAGENT_[A-Z]+|BACKGROUND_[A-Z]+|CHILD_[A-Z]+|LONG_[A-Z]+|WEB_[A-Z]+|LOCAL_[A-Z]+|RETRY_[A-Z]+|FAIL_[A-Z]+",t)
    if found:last=i;text=found[-1]
   tool_done=any(c.get("type")=="tool_result" for m in messages[last+1:] for c in (m.get("content",[]) if isinstance(m.get("content",[]),list) else []))
-  tool=(text.startswith("APPROVAL_") or text.startswith("QUESTION_") or text.startswith("SUBAGENT_")) and not tool_done
+  tool=(text.startswith("APPROVAL_") or text.startswith("QUESTION_") or text.startswith("SUBAGENT_") or text.startswith("BACKGROUND_")) and not tool_done
   model=body.get("model","claude-sonnet-4-6");msgid="msg_"+uuid.uuid4().hex
   if not body.get("stream",False):return self.reply({"id":msgid,"type":"message","role":"assistant","model":model,"content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn","usage":{"input_tokens":25,"output_tokens":5}})
   self.send_response(200);self.send_header("Content-Type","text/event-stream");self.end_headers()
@@ -53,8 +53,9 @@ class Handler(BaseHTTPRequestHandler):
    if tool:
     question=text.startswith("QUESTION_")
     child=text.startswith("SUBAGENT_")
-    name="Agent" if child else "AskUserQuestion" if question else "Write"
+    name="Bash" if text.startswith("BACKGROUND_") else "Agent" if child else "AskUserQuestion" if question else "Write"
     arguments={"description":"Isolated child task","prompt":"CHILD_CLAUDE"} if child else {"questions":[{"question":"Choose deployment target?","header":"Target","multiSelect":False,"options":[{"label":"A","description":"Alpha"},{"label":"B","description":"Beta"}]},{"question":"Choose optional features?","header":"Features","multiSelect":True,"options":[{"label":"X","description":"First"},{"label":"Y","description":"Second"}]}]} if question else {"file_path":str(ROOT/"workspace"/(text+".txt")),"content":"isolated "+uuid.uuid4().hex}
+    if text.startswith("BACKGROUND_"):arguments={"command":"sleep 5; echo STERM_BACKGROUND_DONE","description":"Isolated background command","run_in_background":True}
     item={"type":"tool_use","id":"call_"+uuid.uuid4().hex,"name":name,"input":{}}
     emit("content_block_start",index=0,content_block=item)
     emit("content_block_delta",index=0,delta={"type":"input_json_delta","partial_json":json.dumps(arguments)})
@@ -75,7 +76,7 @@ class Handler(BaseHTTPRequestHandler):
     c=item.get("content",[]);texts.append(c if isinstance(c,str) else "".join(p.get("text","") for p in c if isinstance(p,dict)))
   last=texts[-1] if texts else ""
   last_user=max((i for i,x in enumerate(body.get("input",[])) if x.get("role")=="user"),default=-1)
-  tool=any(marker in last for marker in ["APPROVAL_","QUESTION_","ASYNC_","SUBAGENT_"]) and not any(x.get("type")=="function_call_output" for x in body.get("input",[])[last_user+1:])
+  tool=any(marker in last for marker in ["APPROVAL_","QUESTION_","ASYNC_","SUBAGENT_","BACKGROUND_"]) and not any(x.get("type")=="function_call_output" for x in body.get("input",[])[last_user+1:])
   msgid="msg_"+uuid.uuid4().hex
   response={"id":"resp_"+uuid.uuid4().hex,"object":"response","created_at":int(time.time()),"status":"in_progress","model":body.get("model","probe"),"output":[]}
   self.send_response(200);self.send_header("Content-Type","text/event-stream");self.end_headers()
@@ -83,8 +84,16 @@ class Handler(BaseHTTPRequestHandler):
    data={"type":kind,**values};self.wfile.write(("event: "+kind+"\ndata: "+json.dumps(data)+"\n\n").encode());self.wfile.flush()
   try:
    emit("response.created",response=response)
+   if last in ["SAFETY_REVIEW","SAFETY_STOP"]:
+    error={"code":"misalignment_policy_violation","message":"This request was blocked by our safety systems. Reason: Potentially unintended activity."}
+    if last=="SAFETY_REVIEW":
+     error["misalignment"]={"error_type":"unsafe_activity","detailed_explanation":"This isolated test detected an action outside the requested scope. Continue only after reviewing the requested limit.","steer":{"message":"Continue only within the requested scope. Do not change any files."},"review_target":"sterm-isolated-block"}
+    emit("response.failed",response={**response,"status":"failed","error":error})
+    return
    if tool:
-    if "SUBAGENT_" in last:
+    if "BACKGROUND_" in last:
+     toolname="exec_command";args={"cmd":"Start-Sleep -Seconds 5; Write-Output STERM_BACKGROUND_DONE","yield_time_ms":1000,"max_output_tokens":200}
+    elif "SUBAGENT_" in last:
      toolname="spawn_agent";args={"message":"CHILD_CODEX"}
     elif "ASYNC_" in last:
      toolname="send_message_to_user_async";args={"message":"STERM_ASYNC_NOTICE: please review this update while work continues"}

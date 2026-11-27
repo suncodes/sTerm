@@ -45,15 +45,25 @@ fn trim(session: &mut Session) -> bool {
         changed|=task.title.len()>512||task.message.len()>MAX_TEXT;
         task.title=clipped(&task.title,512);task.message=clipped(&task.message,MAX_TEXT);
     }
-    let mut bytes: usize = session.items.iter().map(|item| item.text.len() + item.title.len()).sum();
+    let mut bytes: usize = session.items.iter().map(encoded_size).sum();
     while session.items.len() > MAX_ITEMS || bytes > MAX_SNAPSHOT_TEXT {
         if session.items.is_empty() { break; }
         changed = true;
         let item = session.items.remove(0);
-        bytes = bytes.saturating_sub(item.text.len() + item.title.len());
+        bytes = bytes.saturating_sub(encoded_size(&item));
+    }
+    for rows in [&mut session.turns, &mut session.notices] {
+        let mut bytes: usize = rows.iter().map(encoded_size).sum();
+        while bytes > 256 * 1024 && !rows.is_empty() { changed = true; bytes = bytes.saturating_sub(encoded_size(&rows.remove(0))); }
+    }
+    if encoded_size(&session.metadata) > 128 * 1024 { session.metadata = json!({"truncated":true}); changed = true; }
+    for task in &mut session.tasks {
+        if encoded_size(&task.data) > MAX_TEXT { task.data = json!({"truncated":true}); changed = true; }
     }
     changed
 }
+
+fn encoded_size(value: &impl serde::Serialize) -> usize { serde_json::to_vec(value).map_or(usize::MAX, |bytes|bytes.len()) }
 
 impl Hub {
     pub fn register(&self, agent: &str, tab_id: u32, generation: u32, cwd: String) -> (String, String) {
@@ -67,6 +77,7 @@ impl Hub {
             turn_id: String::new(), seq: 0, settings_revision: 0, shared: false, allow_control: false,
             capabilities: Capabilities::default(), items: Vec::new(), approvals: Vec::new(), error: None,
             interactions:Vec::new(), tasks:Vec::new(), permissions:json!({}), queued_inputs:Vec::new(), activity:json!({}),
+            turns:Vec::new(), notices:Vec::new(), metadata:json!({}), clock_ms:super::presentation::now_ms(),
         };
         let mut inner = self.inner.lock().unwrap();
         inner.records.insert(id.clone(), Record { session, token: token.clone(), last_seen: Instant::now(),
@@ -92,7 +103,9 @@ impl Hub {
         let inner = self.inner.lock().unwrap();
         let record = inner.records.get(id).ok_or("会话已结束")?;
         if remote && !record.session.shared { return Err("会话尚未分享".into()); }
-        Ok(record.session.clone())
+        let mut session = record.session.clone();
+        session.clock_ms = super::presentation::now_ms();
+        Ok(session)
     }
 
     pub fn share(&self, id: &str, generation: u32, shared: bool, control: bool) -> Result<(), String> {
@@ -181,14 +194,21 @@ impl Hub {
     }
 
     fn validate_action(session:&Session, action:&Action)->Result<(),String>{
-        if session.state=="blocked" && matches!(action,Action::SendText{..}|Action::Queue{..}) { return Err("当前会话被系统阻断，请在电脑端查看恢复选项".into()); }
+        if (session.state=="blocked" || session.activity["kind"]=="blocked") && matches!(action,Action::SendText{..}|Action::Queue{..}) { return Err("当前会话被安全系统停止，请查看阻断卡片中的可用操作".into()); }
         match action {
+            Action::ContinueBlocked{turn_id,review_id}=>{
+                super::codex_block::validate(session,turn_id,review_id)?;
+            }
             Action::SetPermissions{profile,approval_policy,reviewer}=>{
                 if !session.capabilities.policy||!["idle","failed","interrupted"].contains(&session.state.as_str()){return Err("请在空闲时修改权限".into())}
                 super::interactions::validate_permissions(session,profile,approval_policy,reviewer)?;
             }
+            Action::RespondApproval{..} if session.state=="blocked" || session.activity["kind"]=="blocked"=>{
+                return Err("主会话已被安全系统停止，请查看阻断卡片".into());
+            }
             Action::RespondInteraction{request_id,response}=>{
                 let interaction=session.interactions.iter().find(|i|i.id==*request_id).ok_or("审批已处理或失效")?;
+                if (session.state=="blocked" || session.activity["kind"]=="blocked") && interaction.agent_id.is_empty(){return Err("主会话已被安全系统停止，请查看阻断卡片".into());}
                 super::interactions::validate(interaction,response)?;
             }
             Action::Queue{operation,id,text,ids}=>{
@@ -226,9 +246,15 @@ impl Hub {
                     (&interaction.data,MAX_TEXT)
                 },
                 Event::Permissions{value}=>(value,128*1024),
-                Event::Task{task}=>{if task.id.len()>1024||task.parent_id.len()>1024||task.title.len()>512||task.message.len()>MAX_TEXT{return Err("子任务内容过长".into())}continue},
+                Event::Task{task}=>{if task.id.len()>1024||task.parent_id.len()>1024||task.title.len()>512||task.message.len()>MAX_TEXT{return Err("子任务内容过长".into())}(&task.data,MAX_TEXT)},
                 Event::Queue{items}=>{if items.len()>100||serde_json::to_vec(items).map_or(true,|v|v.len()>256*1024){return Err("队列快照过长".into())}continue},
-                Event::Activity{value}=>(value,MAX_TEXT),
+                Event::Activity{value}=>(value,if value["kind"]=="blocked"{512*1024}else{MAX_TEXT}),
+                Event::Turn{value}|Event::Notice{value}|Event::Metadata{value}=>(value,MAX_TEXT),
+                Event::Upsert{item}=>(&item.data,256*1024),
+                Event::Items{items}|Event::TaskItems{items,..}=>{
+                    if items.len()>MAX_ITEMS || items.iter().any(|item|encoded_size(&item.data)>256*1024) { return Err("内容快照过长".into()); }
+                    continue
+                },
                 _=>continue,
             };
             if serde_json::to_vec(value).map_or(true,|v|v.len()>limit){return Err("Agent 事件过长".into())}
@@ -239,22 +265,23 @@ impl Hub {
             let s = &mut record.session;
             match event {
                 Event::Ready { session_id, model, models, capabilities } => {
-                    if s.session_id != session_id { s.permissions=json!({}); s.items.clear(); s.approvals.clear(); s.interactions.clear(); s.tasks.clear(); s.queued_inputs.clear(); s.activity=json!({}); s.turn_id.clear(); }
+                    if s.session_id != session_id { s.permissions=json!({}); s.items.clear(); s.approvals.clear(); s.interactions.clear(); s.tasks.clear(); s.turns.clear(); s.notices.clear(); s.metadata=json!({}); s.queued_inputs.clear(); s.activity=json!({}); s.turn_id.clear(); }
                     let can_end=s.capabilities.end;
                     s.session_id = session_id; s.model = model; s.models = models; s.capabilities = capabilities;
                     s.capabilities.end=can_end;
-                    s.state = "idle".into(); s.error = None; s.settings_revision += 1;
+                    s.state = if s.activity["kind"]=="blocked"{"blocked"}else{"idle"}.into(); s.error = None; s.settings_revision += 1;
                 }
                 Event::State { state, turn_id } => {
                     if !["idle","running","waiting","offline","exited","retrying","failed","interrupted","blocked"].contains(&state.as_str()) { continue; }
                     if state == "running" { s.error = None; }
                     s.state = if state=="running"&&s.interactions.iter().any(|i|i.blocking&&i.agent_id.is_empty()){"waiting".into()}else{state};
+                    if ["offline","exited"].contains(&s.state.as_str()){Self::uncertain_tasks(s);}
                     s.turn_id = turn_id;
                     if ["idle", "offline", "exited"].contains(&s.state.as_str()) { s.approvals.clear(); }
                 }
                 Event::Items { items } => { s.items.retain(|item| !item.agent_id.is_empty()); s.items.extend(items); }
                 Event::Upsert { item } => {
-                    if let Some(old) = s.items.iter_mut().find(|old| old.id == item.id) { *old = item; } else { s.items.push(item); }
+                    if let Some(old) = s.items.iter_mut().find(|old| old.id == item.id) { *old = super::presentation::merge_item(old,item); } else { s.items.push(item); }
                 }
                 Event::Delta { id, delta } => {
                     if let Some(item) = s.items.iter_mut().find(|old| old.id == id) {
@@ -269,10 +296,24 @@ impl Hub {
                 Event::TaskItems { agent_id, items } => { s.items.retain(|item| item.agent_id!=agent_id); s.items.extend(items); }
                 Event::Permissions { value } => { if s.permissions!=value { s.permissions=value; s.settings_revision+=1; } }
                 Event::Queue { items } => { s.queued_inputs=items.into_iter().take(100).collect(); }
-                Event::Activity { value } => { if serde_json::to_vec(&value).is_ok_and(|v|v.len()<=MAX_TEXT){s.activity=value;} }
+                Event::Activity { value } => { s.activity=value; }
+                Event::Turn { value } => {
+                    super::presentation::upsert_value(&mut s.turns,value,128);
+                }
+                Event::Notice { value } => {
+                    super::presentation::upsert_value(&mut s.notices,value,32);
+                }
+                Event::Metadata { value } => {
+                    if let Some(title)=value["title"].as_str(){s.title=clipped(title,512);}
+                    if let Some(cwd)=value["cwd"].as_str(){s.cwd=clipped(cwd,8192);}
+                    super::presentation::merge(&mut s.metadata,&value);
+                }
                 Event::Task { task } => {
-                    if let Some(old)=s.tasks.iter_mut().find(|old|old.id==task.id){*old=task;}
-                    else if s.tasks.len()<64{s.tasks.push(task);}
+                    if let Some(old)=s.tasks.iter_mut().find(|old|old.id==task.id){*old=super::presentation::merge_task(old,task);}
+                    else {
+                        if s.tasks.len()>=64 {if let Some(index)=s.tasks.iter().position(|task|["completed","failed","error","declined","stopped","killed","interrupted"].contains(&task.state.as_str())){s.tasks.remove(index);}}
+                        if s.tasks.len()<64{s.tasks.push(task);}
+                    }
                 }
                 Event::Interaction { mut interaction } => {
                     interaction.detail=clipped(&interaction.detail,MAX_TEXT);
@@ -285,11 +326,27 @@ impl Hub {
                     if s.approvals.len() < 32 && !s.approvals.iter().any(|a| a.id == approval.id) { s.approvals.push(approval); }
                     s.state = "waiting".into();
                 }
-                Event::Resolved { id } => { s.interactions.retain(|i|i.id!=id); s.approvals.retain(|a| a.id != id); if s.approvals.is_empty() && !s.interactions.iter().any(|i|i.blocking&&i.agent_id.is_empty()) && s.state == "waiting" { s.state = "running".into(); } }
+                Event::Resolved { id } => {
+                    if let Some(interaction)=s.interactions.iter().find(|i|i.id==id){
+                        let summary=record.commands.values().find_map(|(command,receipt,_)|if receipt.status!="dispatching"{None}else{match &command.action{
+                            Action::RespondInteraction{request_id,response} if request_id==&id=>{
+                                if ["question","asyncQuestion"].contains(&interaction.kind.as_str()){
+                                    let secret=interaction.data["questions"].as_array().is_some_and(|questions|questions.iter().any(|q|q["secret"]==true));
+                                    Some(if secret{"已提交回答".into()}else{response["answers"].as_object().map(|answers|answers.values().flat_map(|values|values.as_array().into_iter().flatten().filter_map(Value::as_str)).collect::<Vec<_>>().join("；")).unwrap_or_else(||"已提交回答".into())})
+                                }else{Some(interaction.data["decisions"].as_array().into_iter().flatten().find(|choice|choice["value"]==response["decision"]).and_then(|choice|choice["label"].as_str()).or(response["action"].as_str()).or(response["scope"].as_str()).unwrap_or("已提交决定").into())}
+                            },_=>None
+                        }});
+                        super::presentation::upsert_value(&mut s.notices,json!({"id":format!("interaction:{id}"),"requestId":id,"agentId":interaction.agent_id,"title":interaction.title,"message":"原生请求已处理或撤回","localResponseSummary":summary,"severity":"info"}),32);
+                    }
+                    s.interactions.retain(|i|i.id!=id); s.approvals.retain(|a| a.id != id); if s.approvals.is_empty() && !s.interactions.iter().any(|i|i.blocking&&i.agent_id.is_empty()) && s.state == "waiting" { s.state = "running".into(); }
+                }
                 Event::Result { id, ok, message } => {
                     if let Some((_, receipt, _)) = record.commands.get_mut(&id) {
                         if receipt.status == "pending" || receipt.status == "dispatching" {
                             receipt.status = if ok { "accepted" } else { "rejected" }.into(); receipt.message = message;
+                            if ok {if let Action::RespondInteraction{request_id,..}=&record.commands[&id].0.action{
+                                if let Some(notice)=record.session.notices.iter_mut().find(|notice|notice["requestId"]==*request_id){notice["message"]=json!(format!("原生已确认网页回答：{}",notice["localResponseSummary"].as_str().unwrap_or("已提交")));}
+                            }}
                         }
                     }
                 }
@@ -298,7 +355,8 @@ impl Hub {
         }
         let clipped = trim(&mut record.session) || record.session.items.iter().any(|item| item.text.len() >= MAX_TEXT);
         record.session.seq += 1;
-        if clipped || changes.iter().any(|event| matches!(event, Event::Items { .. } | Event::TaskItems { .. } | Event::Ready { .. } | Event::Approval { .. } | Event::Error { .. })) {
+        record.session.clock_ms = super::presentation::now_ms();
+        if clipped || changes.iter().any(|event| matches!(event, Event::Items { .. } | Event::TaskItems { .. } | Event::Ready { .. } | Event::Approval { .. } | Event::Error { .. } | Event::Resolved { .. } | Event::Result { .. })) {
             record.changes.clear();
         } else {
             record.changes.push_back(Change { seq: record.session.seq, events: changes });
@@ -344,6 +402,7 @@ impl Hub {
             Some("Agent 尚未连接")
         } else {
             match &original.action {
+                Action::ContinueBlocked{..} if record.commands.values().any(|(other,receipt,_)|receipt.status=="dispatching"&&matches!(other.action,Action::ContinueBlocked{..}))=>Some("已有继续请求正在确认"),
                 Action::StopTurn { turn_id } if session.turn_id != *turn_id => Some("回合已结束"),
                 Action::SetModel { .. } | Action::SetPolicy { .. } | Action::SetPermissions { .. } | Action::EnterPlan if !["idle","failed","interrupted"].contains(&session.state.as_str()) => Some("Agent 已开始运行，请稍后重试"),
                 Action::SetModel { .. } | Action::SetPolicy { .. } | Action::SetPermissions { .. } | Action::EnterPlan if original.settings_revision != Some(session.settings_revision) => Some("设置已变化，请刷新后重试"),
@@ -360,19 +419,26 @@ impl Hub {
             receipt.status = "rejected".into(); receipt.message = Some(reason.into()); return Err(reason.into());
         }
         receipt.status = "dispatching".into();
+        if matches!(command.action,Action::ContinueBlocked{..}) {
+            record.session.activity["continuationStatus"]=json!("submitted");
+            record.session.seq+=1;record.changes.clear();inner.revision+=1;
+            drop(inner);self.changed.notify_waiters();
+        }
         Ok(())
     }
     pub fn update(&self, id: &str, after: Option<u64>) -> Result<Value, String> {
         let inner = self.inner.lock().unwrap();
         let record = inner.records.get(id).ok_or("会话已结束")?;
         if !record.session.shared { return Err("会话尚未分享".into()); }
-        if after == Some(record.session.seq) { return Ok(json!({"unchanged":true,"seq":record.session.seq})); }
+        let clock_ms = super::presentation::now_ms();
+        if after == Some(record.session.seq) { return Ok(json!({"unchanged":true,"seq":record.session.seq,"clockMs":clock_ms})); }
         if let Some(after) = after {
             if after < record.session.seq && record.changes.front().is_some_and(|change| change.seq <= after + 1) {
-                return Ok(json!({"changes":record.changes.iter().filter(|change| change.seq > after).collect::<Vec<_>>()}));
+                return Ok(json!({"changes":record.changes.iter().filter(|change| change.seq > after).collect::<Vec<_>>(),"clockMs":clock_ms}));
             }
         }
-        Ok(json!({"snapshot":record.session}))
+        let mut snapshot=record.session.clone(); snapshot.clock_ms=clock_ms;
+        Ok(json!({"snapshot":snapshot,"clockMs":clock_ms}))
     }
 
     pub fn set_end_capability(&self,id:&str){
@@ -386,6 +452,7 @@ impl Hub {
         if let Some(record)=inner.records.get_mut(id){
             Self::cancel_pending(record,"Agent 已结束");
             record.session.state="exited".into();record.session.turn_id.clear();record.session.approvals.clear();record.session.interactions.clear();
+            Self::uncertain_tasks(&mut record.session);
             record.changes.clear();record.session.seq+=1;inner.revision+=1;
         }
         drop(inner);self.changed.notify_waiters();
@@ -405,8 +472,28 @@ impl Hub {
             if let Some(record) = self.inner.lock().unwrap().records.get_mut(id) {
                 Self::cancel_pending(record, "Agent 连接已断开，未执行操作已取消");
                 record.session.approvals.clear(); record.session.interactions.retain(|i|i.kind=="asyncQuestion"); record.changes.clear();
+                Self::uncertain_tasks(&mut record.session);
+                if record.session.activity["kind"]=="blocked" {
+                    record.session.activity["details"]=Value::Null;
+                    record.session.activity["reviewId"]=Value::Null;
+                }
             }
-            let _ = self.apply(id, &s.session_id, vec![Event::State { state: "offline".into(), turn_id: s.turn_id }]);
+            let mut events=vec![];
+            if s.activity["kind"]=="blocked" {
+                let mut activity=s.activity;activity["details"]=Value::Null;activity["reviewId"]=Value::Null;
+                events.push(Event::Activity{value:activity});
+            }
+            events.push(Event::State{state:"offline".into(),turn_id:s.turn_id});
+            let _=self.apply(id,&s.session_id,events);
+        }
+    }
+
+    fn uncertain_tasks(session:&mut Session) {
+        for task in &mut session.tasks {
+            if ["running","inProgress","in_progress","waiting","pending","retrying"].contains(&task.state.as_str()) {
+                task.state="unknown".into();
+                super::presentation::merge(&mut task.data,&json!({"statusReason":"连接已断开，等待原生状态确认"}));
+            }
         }
     }
 
@@ -433,6 +520,31 @@ pub type SharedHub = Arc<Hub>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn confirmed_web_answers_leave_a_result_but_never_echo_secret_fields() {
+        for secret in [false,true] {
+            let(hub,id,_)=ready();hub.share(&id,2,true,true).unwrap();
+            hub.apply(&id,"native",vec![Event::Interaction{interaction:Interaction{id:"question".into(),kind:"question".into(),title:"Choose".into(),blocking:true,data:json!({"questions":[{"id":"q","title":"Answer","secret":secret}]}),..Default::default()}}]).unwrap();
+            let mut reply=command(&id);reply.action=Action::RespondInteraction{request_id:"question".into(),response:json!({"answers":{"q":["private-answer"]}})};
+            hub.submit(reply.clone(),true).unwrap();hub.claim(&id,&reply).unwrap();
+            hub.apply(&id,"native",vec![Event::Resolved{id:"question".into()}]).unwrap();
+            assert_eq!(hub.snapshot(&id,false).unwrap().notices[0]["message"],"原生请求已处理或撤回");
+            hub.apply(&id,"native",vec![Event::Result{id:reply.id,ok:true,message:None}]).unwrap();
+            let notice=hub.snapshot(&id,false).unwrap().notices.remove(0);
+            assert!(notice["message"].as_str().unwrap().contains("原生已确认"));
+            assert_eq!(notice.to_string().contains("private-answer"),!secret);
+        }
+    }
+    #[test]
+    fn structured_payloads_are_bounded_and_connection_loss_never_completes_tasks() {
+        let(hub,id,_)=ready();hub.share(&id,2,true,true).unwrap();
+        hub.apply(&id,"native",vec![Event::Task{task:AgentTask{id:"shell".into(),state:"running".into(),kind:"shell".into(),..Default::default()}}]).unwrap();
+        hub.disconnect(&id);
+        let snapshot=hub.snapshot(&id,false).unwrap();assert_eq!(snapshot.tasks[0].state,"unknown");
+        let oversized=Item{id:"large".into(),data:json!({"raw":"x".repeat(270000)}),..Default::default()};
+        assert!(hub.apply(&id,"native",vec![Event::Items{items:vec![oversized]}]).is_err());
+        let update=hub.update(&id,Some(snapshot.seq)).unwrap();assert_eq!(update["unchanged"],true);assert!(update["clockMs"].as_u64().unwrap()>=snapshot.clock_ms);
+    }
     #[test]
     fn owned_agent_exit_preserves_content_and_rejects_stale_controls() {
         let (hub,id,_)=ready();

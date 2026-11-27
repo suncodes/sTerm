@@ -74,6 +74,77 @@ try:
  browser.until('document.querySelector("#agent-messages").textContent.includes("LOCAL_ONE")')
  browser.until('!document.querySelector("#agent-draft").disabled')
  print("PASS Chrome real sTerm Agent page with four shared agents",flush=True)
+ if "--safety-only" in sys.argv:
+  browser.evaluate("document.querySelector('[data-runtime="+json.dumps(codex["runtimeId"])+"]').click();true")
+  browser.until('!document.querySelector("#agent-draft").disabled')
+  browser.call("Emulation.setDeviceMetricsOverride",{"width":390,"height":844,"deviceScaleFactor":1,"mobile":True})
+  prompt("SAFETY_REVIEW")
+  browser.until('!document.querySelector("#blocked-card").hidden && Boolean(document.querySelector("[data-block-acknowledge]"))')
+  row=snapshot(codex["runtimeId"]);assert row["state"]=="blocked" and row["activity"]["details"]["steer"]["message"]
+  assert browser.evaluate('document.querySelector("#composer").hidden && document.querySelector("[data-block-continue]").disabled')
+  browser.evaluate('document.querySelector(".block-findings").open=true;document.querySelector("[data-block-acknowledge]").click();true')
+  browser.until('!document.querySelector("[data-block-continue]").disabled')
+  review=row["activity"]["reviewId"]
+  browser.call("Page.reload");browser.until('Boolean(document.querySelector("[data-block-acknowledge]"))')
+  assert browser.evaluate('!document.querySelector("[data-block-acknowledge]").checked && document.querySelector("[data-block-continue]").disabled')
+  browser.evaluate('document.querySelector(".block-findings").open=true;document.querySelector("[data-block-acknowledge]").click();true')
+  browser.until('!document.querySelector("[data-block-continue]").disabled')
+  browser.evaluate('document.querySelector("[data-block-continue]").click();true')
+  browser.until('document.querySelector("#blocked-card").hidden && !document.querySelector("#composer").hidden')
+  settled(codex["runtimeId"])
+  requests=json.loads((ROOT/"mock-requests.json").read_text(encoding="utf8"))
+  continuations=[r for r in requests if any(x.get("role")=="user" and "Continue only within the requested scope. Do not change any files." in json.dumps(x) for x in r.get("input",[]))]
+  assert len(continuations)==1,continuations
+  print("PASS actual Codex safety error, live findings, browser refresh and explicitly acknowledged native continuation",flush=True)
+  prompt("SAFETY_STOP")
+  browser.until('!document.querySelector("#blocked-card").hidden && !document.querySelector("[data-block-continue]")')
+  row=snapshot(codex["runtimeId"]);assert row["state"]=="blocked"
+  assert not row["activity"]["details"]["detailedExplanation"]
+  browser.evaluate('document.querySelector("#blocked-card [data-open=sessions]").click();true')
+  browser.until('document.querySelector("#sheet-title").textContent==="会话"')
+  browser.evaluate("document.querySelector('[data-select="+json.dumps(claude["runtimeId"])+"]').click();true")
+  browser.until('!document.querySelector("#agent-draft").disabled')
+  print("PASS actual Codex safety stop without continuation materials and mobile shared-session switch",flush=True)
+  sys.exit(0)
+ if "--background-only" in sys.argv:
+  prompt("BACKGROUND_CLAUDE")
+  deadline=time.monotonic()+12
+  while time.monotonic()<deadline:
+   row=snapshot(claude["runtimeId"])
+   if row["interactions"]:
+    browser.until('Boolean(document.querySelector("[data-interaction-decision]"))')
+    browser.evaluate('Array.from(document.querySelectorAll("[data-interaction-decision]")).find(b=>b.textContent==="批准一次").click();true');break
+   if any(t.get("kind")=="shell" for t in row["tasks"]):break
+   time.sleep(.1)
+  row=settled(claude["runtimeId"])
+  print("INFO Claude background "+json.dumps({"tasks":row["tasks"],"tools":[i for i in row["items"] if i["kind"]=="tool"]}),flush=True)
+  deadline=time.monotonic()+12
+  while not any(t.get("kind")=="shell" and t["state"]=="completed" for t in snapshot(claude["runtimeId"])["tasks"]) and time.monotonic()<deadline:time.sleep(.2)
+  print("INFO Claude final background "+json.dumps(snapshot(claude["runtimeId"])["tasks"]),flush=True)
+  assert any(t.get("kind")=="shell" for t in row["tasks"]),"native Bash background task missing"
+  assert any(t.get("kind")=="shell" and t["state"]=="completed" for t in snapshot(claude["runtimeId"])["tasks"]),"native Bash completion missing"
+  browser.evaluate("document.querySelector('[data-runtime="+json.dumps(codex["runtimeId"])+"]').click();true")
+  browser.until('!document.querySelector("#agent-draft").disabled')
+  prompt("BACKGROUND_CODEX")
+  browser.until('Boolean(document.querySelector("[data-interaction-decision]"))')
+  browser.evaluate('Array.from(document.querySelectorAll("[data-interaction-decision]")).find(b=>b.textContent==="批准一次").click();true')
+  browser.until('!document.querySelector(".interaction-prompt")')
+  row=settled(codex["runtimeId"])
+  print("INFO Codex background "+json.dumps({"tasks":row["tasks"],"tools":[i for i in row["items"] if i["kind"]=="tool"]}),flush=True)
+  deadline=time.monotonic()+12
+  while not any(t.get("kind")=="shell" and t["state"]=="completed" for t in snapshot(codex["runtimeId"])["tasks"]) and time.monotonic()<deadline:time.sleep(.2)
+  assert any(t.get("kind")=="shell" and t["state"]=="completed" for t in snapshot(codex["runtimeId"])["tasks"]),"native Codex execution completion missing"
+  browser.evaluate("document.querySelector('[data-runtime="+json.dumps(claude["runtimeId"])+"]').click();true")
+  browser.until('!document.querySelector("#agent-draft").disabled')
+  task=next(t for t in snapshot(claude["runtimeId"])["tasks"] if t.get("kind")=="shell")
+  browser.evaluate('document.querySelector("[data-open=tasks]").click();true')
+  browser.until('Boolean(document.querySelector("[data-task]"))')
+  browser.evaluate("document.querySelector('[data-task="+json.dumps(task["id"])+"]').click();true")
+  browser.until('Boolean(document.querySelector("[data-task-output]"))')
+  browser.evaluate('document.querySelector("[data-task-output]").click();true')
+  browser.until('document.querySelector(".task-output")?.textContent.includes("STERM_BACKGROUND_DONE")')
+  print("PASS native Claude background completion and output; Codex process exit code and duration",flush=True)
+  sys.exit(0)
  if "--focus-interactions" not in sys.argv:
   prompt("WEB_ONE")
   browser.until('document.querySelector("#agent-draft").value===""')
@@ -100,7 +171,8 @@ try:
   browser.evaluate('document.querySelectorAll("input[name=q0]")[1].click();document.querySelectorAll("input[name=q1]")[0].click();document.querySelectorAll("input[name=q1]")[1].click();true')
   time.sleep(1)
   assert browser.evaluate('document.querySelectorAll("input[name=q0]")[1].checked && document.querySelectorAll("input[name=q1]")[1].checked'),"poll destroyed question draft"
-  browser.evaluate('document.querySelector("[data-close-sheet]").click();document.querySelector(".interaction-prompt").click();true')
+  assert browser.evaluate('document.querySelector("#sheet-layer").hidden'),"ordinary question opened a modal"
+  browser.evaluate('document.querySelector("[data-collapse-interaction]").click();document.querySelector("[data-interaction-open]").click();true')
   assert browser.evaluate('document.querySelectorAll("input[name=q0]")[1].checked'),"panel destroyed draft"
   browser.evaluate('document.querySelector("#interaction-form").requestSubmit();true')
   browser.until('!document.querySelector(".interaction-prompt")')
@@ -312,7 +384,8 @@ try:
   # 审批详情固定呈现，两个客户端状态共用真实 request。
   prompt("APPROVAL_DETAILS_CODEX")
   browser.until('Boolean(document.querySelector(".interaction-prompt"))')
-  browser.evaluate('if(document.querySelector("#sheet-layer").hidden)document.querySelector(".interaction-prompt").click();true')
+  assert browser.evaluate('document.querySelector("#sheet-layer").hidden'),"ordinary approval opened a modal"
+  browser.evaluate('document.querySelector("[data-expand-interaction]").click();true')
   browser.until('!document.querySelector("#sheet-layer").hidden')
   shot=browser.call("Page.captureScreenshot",{"format":"png"})
   (ROOT/"agent-approval-panel.png").write_bytes(base64.b64decode(shot["data"]))
@@ -341,13 +414,13 @@ try:
  urllib.request.urlopen(json.loads((ROOT/"mock-endpoint.json").read_text())["endpoint"]+"/hold/reset").read()
  prompt("SUBAGENT_CODEX")
  deadline=time.monotonic()+18
- while not snapshot(codex["runtimeId"])["tasks"] and time.monotonic()<deadline:time.sleep(.2)
- assert snapshot(codex["runtimeId"])["tasks"],"missing real Codex child task"
+ while not any(task.get("kind")!="shell" for task in snapshot(codex["runtimeId"])["tasks"]) and time.monotonic()<deadline:time.sleep(.2)
+ child=next(task for task in snapshot(codex["runtimeId"])["tasks"] if task.get("kind")!="shell")
  print("INFO child task "+json.dumps(snapshot(codex["runtimeId"])["tasks"]),flush=True)
  browser.until('!document.querySelector("#task-bar").hidden')
  browser.evaluate('document.querySelector("[data-open=tasks]").click();true')
  browser.until('Boolean(document.querySelector("[data-task]"))')
- browser.evaluate('document.querySelector("[data-task]").click();true')
+ browser.evaluate("document.querySelector('[data-task="+json.dumps(child["id"])+"]').click();true")
  # 原生 v1 在子线程首次落盘前可能拒绝内容订阅；先断言实际运行状态，再释放本地 fixture。
  assert any(t["state"] in ["running","pending"] for t in snapshot(codex["runtimeId"])["tasks"])
  urllib.request.urlopen(json.loads((ROOT/"mock-endpoint.json").read_text())["endpoint"]+"/hold/release").read()

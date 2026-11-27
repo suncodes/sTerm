@@ -17,6 +17,9 @@ pub fn validate(interaction: &Interaction, response: &Value) -> Result<(), Strin
                     || values.iter().any(|v| v.as_str().is_none_or(|s| s.trim().is_empty() || s.len() > 8192)) {
                     return Err("请选择有效答案".into());
                 }
+                if question["other"]==false && question["options"].as_array().is_some_and(|options|!options.is_empty()&&values.iter().any(|value|!options.iter().any(|option|option["label"]==*value))) {
+                    return Err("此问题只能选择原生提供的选项".into());
+                }
             }
         }
         "approval" | "plan" => {
@@ -31,6 +34,9 @@ pub fn validate(interaction: &Interaction, response: &Value) -> Result<(), Strin
             let action = response["action"].as_str().unwrap_or_default();
             if !["accept", "decline", "cancel"].contains(&action) { return Err("无效表单操作".into()); }
             if action == "accept" { validate_form(&interaction.data["schema"], &response["content"])?; }
+        }
+        "confirmation" => {
+            if !["accept","decline","cancel"].contains(&response["action"].as_str().unwrap_or_default()){return Err("无效确认操作".into())}
         }
         "url" => {
             let url=interaction.data["url"].as_str().and_then(|s|tauri::Url::parse(s).ok()).ok_or("授权地址无效")?;

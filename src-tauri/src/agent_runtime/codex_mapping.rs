@@ -1,6 +1,7 @@
 //! Codex 原生事件到共享交互的映射，保留服务端允许的决定与问题身份。
 use super::protocol::*;
 use serde_json::{json, Value};
+pub use super::codex_events::{reasoning_text,tool_output,incremental_item,passive_event,notice};
 
 pub fn scoped_item(value:&Value,turn:&str,agent:&str)->Option<Item>{
     let mut item=super::codex::item(value,turn)?;
@@ -28,19 +29,19 @@ pub fn request(method:&str,id:&str,p:&Value,agent:&str)->Option<Interaction>{
             ("approval",if method.contains("fileChange"){"修改文件"}else if p["kind"]=="writeStdin"{"向运行中命令输入"}else{"执行命令"},json!({"decisions":choices,"context":p}))
         }
         "item/tool/requestUserInput"=>("question","需要你回答",json!({"questions":questions(&p["questions"]),"cancellable":true})),
-        "item/permissions/requestApproval"=>("permissions","申请额外执行权限",json!({"permissions":p["permissions"]})),
+        "item/permissions/requestApproval"=>("permissions","申请额外执行权限",json!({"permissions":p["permissions"],"context":p})),
         "mcpServer/elicitation/request"=>{
             match p["mode"].as_str().unwrap_or("form"){
+                "form"|"openai/form"|"openaiForm" if p["requestedSchema"]["properties"].as_object().is_some_and(|fields|fields.is_empty()) =>("confirmation","工具需要确认",json!({"schema":p["requestedSchema"],"serverName":p["serverName"]})),
                 "form"|"openai/form"|"openaiForm"=>("form","工具需要补充信息",json!({"schema":p["requestedSchema"],"serverName":p["serverName"]})),
                 "url"=>("url","工具需要外部授权",json!({"url":p["url"],"serverName":p["serverName"]})),
                 _=>("external","请在电脑端完成验证",json!({})),
             }
         }
-        "item/tool/call"=>("external","此工具需要原生客户端处理",json!({})),
         _=>return None,
     };
     Some(Interaction{id:id.into(),kind:kind.into(),title:title.into(),
-        detail:p["command"].as_str().or(p["reason"].as_str()).or(p["message"].as_str()).unwrap_or_default().into(),
+        detail:p["reason"].as_str().or(p["message"].as_str()).unwrap_or_default().into(),
         turn_id:p["turnId"].as_str().unwrap_or_default().into(),agent_id:agent.into(),
         blocking:p["isBlocking"].as_bool().unwrap_or(true),data})
 }
@@ -57,15 +58,26 @@ pub fn response(interaction:&Interaction,native:&Value,response:&Value)->Result<
             }
         }
         "permissions"=>json!({"permissions":if response["scope"]=="deny"{json!({})}else{serde_json::to_value(native["permissions"].as_object().ok_or("权限请求无效")?.iter().filter(|(key,value)|["network","fileSystem"].contains(&key.as_str())&&!value.is_null()).map(|(k,v)|(k.clone(),v.clone())).collect::<serde_json::Map<_,_>>()).map_err(|_|"权限请求无效")?},"scope":if response["scope"]=="session"{"session"}else{"turn"}}),
-        "form"|"url"=>json!({"action":response["action"],"content":response.get("content").cloned().unwrap_or(Value::Null),"_meta":Value::Null}),
+        "form"|"url"|"confirmation"=>json!({"action":response["action"],"content":response.get("content").cloned().unwrap_or(Value::Null),"_meta":Value::Null}),
         _=>return Err("请在电脑端完成此交互".into()),
     })
 }
 
 pub fn terminal_state(turn:&Value)->(&'static str,Value){
+    terminal_state_with_activity(turn, &Value::Null, false)
+}
+
+pub fn terminal_state_live(turn:&Value, previous:&Value)->(&'static str,Value){
+    if previous["kind"]=="blocked" && previous["turnId"]==turn["id"] && !super::codex_block::is_block(&turn["error"]) {
+        return ("blocked",previous.clone());
+    }
+    terminal_state_with_activity(turn, previous, true)
+}
+
+fn terminal_state_with_activity(turn:&Value, previous:&Value, live:bool)->(&'static str,Value){
     let error=&turn["error"];
-    if error["codexErrorInfo"]=="misalignmentPolicyViolation"||error["codex_error_info"]=="misalignment_policy_violation"{
-        return ("blocked",json!({"kind":"blocked","message":error["message"],"details":error["misalignment"]}));
+    if super::codex_block::is_block(error){
+        return ("blocked",super::codex_block::activity(turn["id"].as_str().unwrap_or_default(),error,previous,live));
     }
     match turn["status"].as_str(){
         Some("failed")=>("failed",json!({"kind":"failed","message":error["message"],"code":error["codexErrorInfo"]})),

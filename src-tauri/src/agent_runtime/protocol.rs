@@ -12,6 +12,7 @@ pub struct Item {
     #[serde(default)] pub status: String,
     #[serde(default)] pub turn_id: String,
     #[serde(default)] pub agent_id: String,
+    #[serde(default)] pub data: Value,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -47,6 +48,8 @@ pub struct AgentTask {
     #[serde(default)] pub state: String,
     #[serde(default)] pub turn_id: String,
     #[serde(default)] pub message: String,
+    #[serde(default)] pub kind: String,
+    #[serde(default)] pub data: Value,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -75,6 +78,7 @@ pub struct Session {
     pub items: Vec<Item>, pub approvals: Vec<Approval>,
     pub interactions: Vec<Interaction>, pub tasks: Vec<AgentTask>,
     pub permissions: Value, pub queued_inputs: Vec<Value>, pub activity: Value,
+    pub turns: Vec<Value>, pub notices: Vec<Value>, pub metadata: Value, pub clock_ms: u64,
     pub error: Option<String>,
 }
 
@@ -95,6 +99,7 @@ pub enum Action {
     SetPolicy { sandbox: String, #[serde(rename = "approvalPolicy")] approval_policy: String },
     SetPermissions { profile: String, #[serde(rename = "approvalPolicy")] approval_policy: String, reviewer: String },
     EnterPlan,
+    ContinueBlocked { #[serde(rename = "turnId")] turn_id: String, #[serde(rename = "reviewId")] review_id: String },
     RespondApproval { #[serde(rename = "requestId")] request_id: String, allow: bool },
     RespondInteraction { #[serde(rename = "requestId")] request_id: String, response: Value },
     Queue { operation: String, #[serde(default, rename = "queueId")] id: String, #[serde(default)] text: String, #[serde(default)] ids: Vec<String> },
@@ -117,6 +122,9 @@ pub enum Event {
     Permissions { value: Value },
     Queue { items: Vec<Value> },
     Activity { value: Value },
+    Turn { value: Value },
+    Notice { value: Value },
+    Metadata { value: Value },
     Task { task: AgentTask },
     Interaction { interaction: Interaction },
     Resolved { id: String },
