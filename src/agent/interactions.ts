@@ -30,6 +30,7 @@ export function formSupported(schema: Record<string, unknown> | undefined): bool
 export function interactionHtml(item: AgentInteraction, enabled: boolean, row?:AgentSession): string {
   const disabled = enabled ? "" : " disabled";
   const button = (label: string, attrs: string) => '<button type="button" class="subtle-button" '+attrs+disabled+'>'+e(label)+'</button>';
+  let actions = "";
   let body = '<p class="sheet-description">'+e(item.agentId ? "来自子 Agent：" + item.agentId : "来自主 Agent")+' · '+(item.blocking ? "正在等待回答" : "可随时回答，Agent 可以继续")+'</p>';
   if (["approval","plan","permissions"].includes(item.kind))body+=approvalHtml(item,row);
   else if(item.detail)body+='<p class="approval-reason">'+e(item.detail)+'</p>';
@@ -44,9 +45,13 @@ export function interactionHtml(item: AgentInteraction, enabled: boolean, row?:A
     }
     body += '<div class="confirm-actions">'+(item.data.cancellable?button("取消提问",'data-interaction-cancel'):"")+'<button type="submit" class="subtle-button"'+disabled+'>提交回答</button></div></form>';
   } else if (item.kind === "approval" || item.kind === "plan") {
-    body += '<div class="interaction-decisions">'+(item.data.decisions ?? []).map((choice,index)=>'<div class="decision-choice">'+button(choice.label,'data-interaction-decision="'+index+'"')+'<div class="decision-description">'+decisionDescription(choice.value,item.data.suggestions)+'</div></div>').join("")+'</div>';
+    for(const choice of item.data.decisions??[]){
+      const description=decisionDescription(choice.value,item.data.suggestions);
+      if(description)body+='<div class="decision-description"><strong>'+e(choice.label)+'</strong> · '+description+'</div>';
+    }
+    actions = '<div class="interaction-decisions">'+(item.data.decisions ?? []).map((choice,index)=>button(choice.label,'data-interaction-decision="'+index+'"')).join("")+'</div>';
   } else if (item.kind === "permissions") {
-    body += '<div class="interaction-decisions">'+button("仅本回合允许",'data-permission-scope="turn"')+button("本会话允许",'data-permission-scope="session"')+button("拒绝",'data-permission-scope="deny"')+'</div>';
+    actions = '<div class="interaction-decisions">'+button("仅本回合允许",'data-permission-scope="turn"')+button("本会话允许",'data-permission-scope="session"')+button("拒绝",'data-permission-scope="deny"')+'</div>';
   } else if(item.kind==="confirmation") {
     body+='<div class="interaction-decisions">'+button("确认",'data-form-action="accept"')+button("拒绝",'data-form-action="decline"')+button("取消",'data-form-action="cancel"')+'</div>';
   } else if (item.kind === "form" && formSupported(item.data.schema)) {
@@ -70,7 +75,7 @@ export function interactionHtml(item: AgentInteraction, enabled: boolean, row?:A
     if (item.kind === "form") body += '<pre class="detail-code">'+e(JSON.stringify(item.data.schema,null,2))+'</pre>';
   }
   if(item.data.context)body+='<details class="native-detail"><summary>原生请求技术详情</summary><pre class="detail-code">'+e(JSON.stringify(item.data.context,null,2))+'</pre></details>';
-  return body;
+  return actions?'<div class="interaction-scroll">'+body+'</div><div class="interaction-footer">'+actions+'</div>':body;
 }
 export function readInteraction(item: AgentInteraction, form: HTMLFormElement): unknown {
   const data = new FormData(form);

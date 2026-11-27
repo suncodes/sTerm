@@ -1,10 +1,12 @@
 import "./style.css";
 import { RemoteLogin, pairRemoteBrowser } from "../remote/login";
 import { applyChanges } from "./state";
+import { conversationItems, liveTasks } from "./display";
+import { activeNotices, importantNotice, noticeFingerprint, noticeKey, NoticeTracker } from "./notices";
 import { blockedHtml, blockReview } from "./blocking";
 import { interactionHtml, readInteraction, tasksHtml, taskLabel } from "./interactions";
 import { itemHtml, stateLabel, runningStates, recordDuration, durationLabel, taskTimingHtml } from "./presentation";
-import type { AgentChange, AgentAction, AgentItem, AgentRoster, AgentSession, AgentInteraction, AgentPermission } from "./types";
+import type { AgentChange, AgentAction, AgentItem, AgentRoster, AgentSession, AgentInteraction, AgentPermission, AgentNotice } from "./types";
 
 const byId = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
 const list=byId("agent-sessions"), messages=byId("agent-messages"), approvals=byId("agent-approvals"), conversation=byId("conversation");
@@ -16,6 +18,8 @@ const interactionDrafts=new Map<string,{name:string;value:string;checked:boolean
 const collapsedInteractions=new Set<string>(),expandedInteractions=new Set<string>(),interactionErrors=new Map<string,string>(),clockAnchors=new Map<string,{received:number;clock:number}>();
 const taskOutputs=new Map<string,{text:string;truncated?:boolean}>();
 const pendingBlocks=new Set<string>();
+const noticeTracker=new NoticeTracker(),dismissedNotices=new Set<string>(),seenErrors=new Map<string,string|null>();
+let noticeTimer:number,transientNotice:{scope:string;value:AgentNotice;until:number}|undefined;
 let cardRequest="",cardKey="";
 let permissionChoice:AgentPermission|undefined;
 const storedSession="sterm-agent-selection";
@@ -161,7 +165,7 @@ function render(row:AgentSession):void{
   byId("settings-current-state").textContent=labels[row.state]??row.state;
   const options=[...new Set([row.model,...row.models])].filter(Boolean);
   if(model.dataset.key!==options.join("|")){model.replaceChildren(...options.map(value=>new Option(value,value)));model.dataset.key=options.join("|");}model.value=row.model;
-  const mainItems=row.items.filter(i=>!i.agentId);
+  const mainItems=conversationItems(row).filter(i=>!i.agentId);
   const present=new Set(mainItems.map(i=>i.id));
   for(const [id,old] of itemNodes)if(!present.has(id)){old.node.remove();itemNodes.delete(id);}
   for(const item of mainItems){
@@ -174,22 +178,38 @@ function render(row:AgentSession):void{
   for(const item of mainItems){const node=itemNodes.get(item.id)?.node;if(!node)continue;if(node!==position)messages.insertBefore(node,position);position=node.nextElementSibling;}
   renderApprovals(row);renderInteractions(row);renderBlocked(row);
   byId("activity-bar").hidden=false;byId("activity-dot").dataset.state=row.state;
-  updateActivity(row);
   if(row.state==="idle"||row.state==="exited")queues.delete(row.runtimeId);
-  const activity=byId("agent-activity-detail");activity.hidden=!row.activity?.message||row.activity?.kind==="blocked";activity.textContent=row.activity?.message??"";
+  const activity=byId("agent-activity-detail");activity.hidden=!busy(row)||!row.activity?.message||row.activity?.kind==="blocked";activity.textContent=row.activity?.message??"";
   activity.dataset.state=row.activity?.kind??row.state;
-  const tasks=row.tasks??[],activeTasks=tasks.filter(task=>runningStates.includes(task.state));
+  const tasks=liveTasks(row),uncertain=tasks.filter(task=>["unknown","blocked","paused"].includes(task.state)).length;
   byId("task-bar").hidden=!tasks.length;
-  byId("task-text").textContent="任务 "+tasks.length+" 项 · "+activeTasks.length+" 项运行中";
-  const notices=row.notices??[],latestNotice=notices[notices.length-1];
-  byId("native-notice").hidden=!latestNotice;byId("native-notice-text").textContent=latestNotice?String(latestNotice.message||latestNotice.title||"原生提示"):"";
+  byId("task-text").textContent=[tasks.length-uncertain?tasks.length-uncertain+" 项任务进行中":"",uncertain?uncertain+" 项状态待确认":""].filter(Boolean).join(" · ");
+  renderNotices(row);
   const tokenUsage=row.metadata?.tokenUsage as {total?:{totalTokens?:number};modelContextWindow?:number;last?:{totalTokens?:number}}|undefined;
   const nativeUsage=[...(row.turns??[])].reverse().find(turn=>!turn.agentId)?.usage;
   const usage=byId("usage-summary");usage.hidden=!tokenUsage&&!nativeUsage;usage.textContent=tokenUsage?"Token "+(tokenUsage.total?.totalTokens?.toLocaleString()??"未知")+(tokenUsage.modelContextWindow&&typeof tokenUsage.last?.totalTokens==="number"?" · 上下文 "+Math.round(tokenUsage.last.totalTokens/tokenUsage.modelContextWindow*100)+"%":""):nativeUsage?"本轮 Token · 输入 "+String(nativeUsage.input_tokens??"未知")+" · 输出 "+String(nativeUsage.output_tokens??"未知"):"";
-  if(row.error)showNotice(row.error);
+  updateActivity(row);
+  const errorScope=JSON.stringify([row.runtimeId,row.sessionId]);
+  if(row.error&&seenErrors.get(errorScope)!==row.error)showNotice(row.error);
+  seenErrors.set(errorScope,row.error);
   if(sheetType==="approval-detail"&&!row.approvals.some(a=>a.id===sheetRequest))closeSheet();
   syncControls();updateSheet();
   if(atBottom)conversation.scrollTop=conversation.scrollHeight;
+}
+function renderNotices(row:AgentSession):void{
+  const scope=JSON.stringify([row.runtimeId,row.sessionId]),fresh=noticeTracker.update(row);
+  const recent=fresh.filter(entry=>entry.phase!=="running"&&!entry.id.startsWith("interaction:"));
+  const important=recent.filter(importantNotice).slice(-1)[0];
+  if(important)transientNotice={scope,value:important,until:Date.now()+10000};
+  else if(recent.length)toast(String(recent[recent.length-1].message||recent[recent.length-1].title||"运行状态已更新").slice(0,240));
+  const identity=(entry:AgentNotice):string=>scope+noticeKey(entry)+noticeFingerprint(entry);
+  const progress=activeNotices(row).filter(entry=>!dismissedNotices.has(identity(entry)));
+  const transient=transientNotice?.scope===scope&&transientNotice.until>Date.now()&&row.notices?.some(entry=>noticeKey(entry)===noticeKey(transientNotice!.value)&&noticeFingerprint(entry)===noticeFingerprint(transientNotice!.value))?transientNotice.value:undefined;
+  const shown=transient&&!dismissedNotices.has(identity(transient))?transient:progress[progress.length-1];
+  const banner=byId("native-notice");banner.hidden=!shown;banner.dataset.noticeKey=shown?identity(shown):"";
+  byId("native-notice-text").textContent=shown?String(shown.message||shown.title||"运行提示")+(shown===progress[progress.length-1]&&progress.length>1?" · 另有 "+(progress.length-1)+" 项进行中":""):"";
+  clearTimeout(noticeTimer);
+  if(transientNotice?.scope===scope&&transientNotice.until>Date.now())noticeTimer=window.setTimeout(()=>{const currentRow=active();if(currentRow)renderNotices(currentRow);},transientNotice.until-Date.now()+20);
 }
 function renderBlocked(row:AgentSession):void{
   const card=byId("blocked-card");card.hidden=row.state!=="blocked"&&row.activity?.kind!=="blocked";
@@ -217,8 +237,8 @@ function fillSheet():void{
     if(!item){closeSheet();return;}
     html=heading(esc(item.title))+'<div data-interaction-id="'+esc(item.id)+'">'+interactionHtml(item,writable()&&!pendingApprovals.has(current+":"+item.id),row)+'</div>';
   }
-  else if(sheetType==="tasks"&&row)html=heading("后台任务与子 Agent")+tasksHtml(row);
-  else if(sheetType==="notices"&&row)html=heading("运行提示")+(row.notices??[]).map(entry=>'<section class="notice-entry"><strong>'+esc(entry.title)+'</strong><p>'+esc(entry.message)+'</p></section>').join("");
+  else if(sheetType==="tasks"&&row)html=heading("任务记录")+(tasksHtml(row)||'<p class="sheet-description">暂无任务记录。</p>');
+  else if(sheetType==="notices"&&row)html=heading("运行提示记录")+(row.notices??[]).slice().reverse().map(entry=>'<section class="notice-entry"><strong>'+esc(entry.title)+'</strong><p>'+esc(entry.message)+'</p></section>').join("");
   else if(sheetType==="task-detail"&&row){
     const task=row.tasks?.find(t=>t.id===sheetRequest);
     const output=taskOutputs.get(current+":"+row.sessionId+":"+sheetRequest);
@@ -230,19 +250,19 @@ function fillSheet():void{
   }
   else if(sheetType==="approval-detail"&&row){const a=row.approvals.find(a=>a.id===sheetRequest);if(!a){closeSheet();return;}html=heading("审批详情")+'<p class="sheet-description">'+esc(a.title)+'</p><pre class="detail-code">'+esc(a.detail)+'</pre><p class="sheet-description">批准仅针对这次操作。任一侧处理后，其余页面同步关闭待办。</p><div class="approval-actions" data-request="'+esc(a.id)+'">'+approvalButtons(a.id,!writable()||!row.capabilities.approvals)+'</div>';}
   else if(sheetType==="queue")html=heading(row?.capabilities.queue?"原生输入队列":"已追加的消息")+'<p class="sheet-description">'+(row?.capabilities.queue?"与电脑端共享的真实队列。执行前可以编辑、删除、调整顺序。":"Agent 已接受这些输入，后续安排由 Claude 决定。")+'</p>'+(row?.capabilities.queue?(row.queuedInputs??[]).map((item,index)=>'<section class="queued-item" data-queue-id="'+esc(item.id)+'"><textarea name="queue-'+esc(item.id)+'" aria-label="队列消息" maxlength="32768">'+esc(item.text)+'</textarea><div class="interaction-decisions"><button class="subtle-button" data-queue-operation="update">保存</button><button class="subtle-button" data-queue-operation="delete">删除</button><button class="subtle-button" data-queue-operation="up" '+(!index?"disabled":"")+'>上移</button><button class="subtle-button" data-queue-operation="start">立即执行</button></div></section>').join(""):(queues.get(current)??[]).map((text,i)=>'<div class="detail-code">'+(i+1)+'. '+esc(text)+'</div>').join(""))+'<p class="sheet-footnote">停止当前回合不会自动清空队列。</p>';
-  else if(sheetType==="more")html=heading("会话选项")+'<button class="menu-item" data-open="sessions">'+icon("list")+'所有会话</button><button class="menu-item" data-open="info">'+icon("monitor")+'会话信息</button><button class="menu-item" data-open="display">'+icon("settings")+'显示设置</button><button class="menu-item" data-copy-link>'+icon("copy")+'复制会话链接</button><button class="menu-item" data-reconnect>'+icon("refresh")+'重新连接</button>'+(row?.capabilities.end?'<button class="menu-item danger" data-open="end-confirm" '+(!writable()?"disabled":"")+'>'+icon("stop")+'结束 Agent 会话</button>':"");
+  else if(sheetType==="more")html=heading("会话选项")+'<button class="menu-item" data-open="sessions">'+icon("list")+'所有会话</button><button class="menu-item" data-open="info">'+icon("monitor")+'会话信息</button>'+(row?.tasks?.length?'<button class="menu-item" data-open="tasks">'+icon("list")+'任务记录<span class="menu-value">'+row.tasks.length+' 项</span></button>':"")+(row?.notices?.length?'<button class="menu-item" data-open="notices">'+icon("list")+'运行提示记录<span class="menu-value">'+row.notices.length+' 条</span></button>':"")+'<button class="menu-item" data-open="display">'+icon("settings")+'显示设置</button><button class="menu-item" data-copy-link>'+icon("copy")+'复制会话链接</button><button class="menu-item" data-reconnect>'+icon("refresh")+'重新连接</button>'+(row?.capabilities.end?'<button class="menu-item danger" data-open="end-confirm" '+(!writable()?"disabled":"")+'>'+icon("stop")+'结束 Agent 会话</button>':"");
   else if(sheetType==="end-confirm"&&row)html=heading("结束 Agent 会话？")+'<p class="sheet-description">将结束电脑端的「'+esc(row.title)+'」。网页保留已显示的内容。仅中断当前回复请使用「停止生成」。</p><div class="confirm-actions"><button class="subtle-button" data-close-sheet>取消</button><button class="danger-button" data-end>结束会话</button></div>';
   else if(sheetType==="info")html=heading("会话信息")+(row?'<pre class="detail-code">'+esc(row.title)+'\n'+esc(row.cwd)+'\n'+esc(row.agent)+' · '+esc(row.model)+'\n执行权限：'+esc(policyLabel(row))+'\n网页：'+(row.allowControl?"允许操作":"只读")+'</pre>':'<p class="sheet-description">暂无共享会话。</p>');
   else if(sheetType==="display")html=heading("显示设置")+'<p class="sheet-description">只改变网页消息，不影响电脑终端。</p><div class="menu-item">消息字号<span class="menu-value"><button class="subtle-button" data-font="-1" aria-label="减小字号">−</button> '+displaySize+' px <button class="subtle-button" data-font="1" aria-label="增大字号">+</button></span></div>';
   byId("sheet").innerHTML=html;
-  if(sheetType==="task-detail"&&row){const task=row.tasks?.find(entry=>entry.id===sheetRequest);for(const item of row.items.filter(entry=>task?.kind==="shell"?entry.id===task.data?.itemId:entry.agentId===sheetRequest))byId("task-content").append(renderItem(item,row));}
+  if(sheetType==="task-detail"&&row){const task=row.tasks?.find(entry=>entry.id===sheetRequest);for(const item of conversationItems(row).filter(entry=>task?.kind==="shell"?entry.id===task.data?.itemId:entry.agentId===sheetRequest))byId("task-content").append(renderItem(item,row));}
   restoreInteractionDraft();
   if(row)updateTaskTimers(row);
 
 }
 function updateSheet():void{
   if(!sheetType)return;
-  const row=active(),key=sheetType==="interaction"?JSON.stringify([current,row?.sessionId,sheetRequest,row?.interactions?.find(i=>i.id===sheetRequest),writable(),[...pendingApprovals]]):JSON.stringify([sheetType,sheetRequest,roster.map(r=>[r.runtimeId,r.title,r.state,r.allowControl]),row?.approvals,row?.interactions,row?.tasks,row?.permissions,row?.queuedInputs,sheetType==="task-detail"?row?.items.filter(i=>i.agentId===sheetRequest):undefined,row?.allowControl,row?.model,row?.policy,[...pendingApprovals]]);
+  const row=active(),key=sheetType==="interaction"?JSON.stringify([current,row?.sessionId,sheetRequest,row?.interactions?.find(i=>i.id===sheetRequest),writable(),[...pendingApprovals]]):JSON.stringify([sheetType,sheetRequest,roster.map(r=>[r.runtimeId,r.title,r.state,r.allowControl]),row?.approvals,row?.interactions,row?.tasks,row?.notices,row?.permissions,row?.queuedInputs,sheetType==="task-detail"?row?.items.filter(i=>i.agentId===sheetRequest||i.id===row?.tasks.find(task=>task.id===sheetRequest)?.data?.itemId):undefined,row?.allowControl,row?.model,row?.policy,[...pendingApprovals]]);
   if(sheetKey===key)return;sheetKey=key;
   const focused=document.activeElement as HTMLInputElement|null,fieldIndex=[...byId("sheet").querySelectorAll("input,textarea,select")].indexOf(focused!),selection=focused&&typeof focused.selectionStart==="number"?[focused.selectionStart,focused.selectionEnd]:null,keyAttr=focused?.dataset.select,decision=focused?.dataset.decision;
   saveInteractionDraft();fillSheet();if(keyAttr)byId("sheet").querySelector<HTMLButtonElement>('[data-select="'+CSS.escape(keyAttr)+'"]')?.focus();
@@ -262,6 +282,7 @@ async function poll():Promise<void>{
     const alive=new Set(roster.map(r=>r.runtimeId));
     for(const id of snapshots.keys())if(!alive.has(id))snapshots.delete(id);
     connected=true;
+    if(!wasConnected){showNotice();wasConnected=true;}
     if(!current||!alive.has(current)){if(roster.length||current)select(roster[0]?.runtimeId??"");}
     renderRoster(roster);updateSheet();
     const id=current;
@@ -273,7 +294,6 @@ async function poll():Promise<void>{
       if(result.changes){const old=snapshots.get(id);next=old?applyChanges(old,result.changes)??undefined:undefined;if(!next)next=(await request<{snapshot:AgentSession}>("/api/agents/"+id)).snapshot;}
       if(next){if(next.protocolVersion!==1)throw new Error("Agent 协议版本不兼容，请更新 sTerm");if(typeof result.clockMs!=="number"&&result.snapshot&&typeof next.clockMs==="number")clockAnchors.set(id,{received:performance.now(),clock:next.clockMs});snapshots.set(id,next);if(id===current)render(next);}
     }
-    if(!wasConnected){showNotice();wasConnected=true;}
     connection.textContent="已连接";connection.dataset.state="connected";syncControls();
   }catch(error){
     connected=false;wasConnected=false;connection.textContent="重连中";connection.dataset.state="offline";
@@ -396,14 +416,14 @@ function renderInteractions(row:AgentSession):void{
   if(cardKey===signature)return;
   const sameRequest=card.dataset.draftKey===selectionKey+":interaction";
   const focused=document.activeElement as HTMLInputElement|null,fields=[...card.querySelectorAll("input,textarea,select,button")],fieldIndex=sameRequest?fields.indexOf(focused!):-1,selection=focused&&typeof focused.selectionStart==="number"?[focused.selectionStart,focused.selectionEnd!]:undefined;
-  const details=sameRequest?[...card.querySelectorAll("details")].map(detail=>detail.open):[],scroll=sameRequest?card.querySelector(".interaction-card-body")?.scrollTop??0:0;
+  const details=sameRequest?[...card.querySelectorAll("details")].map(detail=>detail.open):[],scroll=sameRequest?(card.querySelector(".interaction-scroll")??card.querySelector(".interaction-card-body"))?.scrollTop??0:0;
   saveCardDraft();cardKey=signature;
-  card.dataset.interactionId=cardRequest;card.dataset.draftKey=current+":"+row.sessionId+":"+cardRequest+":interaction";
+  card.dataset.kind=selected.kind;card.dataset.interactionId=cardRequest;card.dataset.draftKey=current+":"+row.sessionId+":"+cardRequest+":interaction";
   card.innerHTML='<div class="interaction-card-heading"><div><strong>'+esc(selected.title)+'</strong><small>'+esc(selected.agentId?"子 Agent":"主 Agent")+' · '+(selected.blocking?"等待回答":"可随时回答")+' · '+(items.findIndex(item=>item.id===cardRequest)+1)+' / '+items.length+'</small></div><div>'+(collapsed||inSheet?'<button class="touch-button" data-interaction-open="'+esc(cardRequest)+'">展开</button>':'<button class="touch-button" data-expand-interaction aria-label="放大详情">'+icon("expand")+'</button><button class="touch-button" data-collapse-interaction aria-label="收起待办">'+icon("down")+'</button>')+'</div></div>'+(collapsed||inSheet?"":'<div class="interaction-card-body">'+interactionHtml(selected,writable()&&!pendingApprovals.has(current+":"+cardRequest),row)+'</div>')+'<p class="interaction-error" role="status">'+esc(interactionErrors.get(current+":"+cardRequest)??(pendingApprovals.has(current+":"+cardRequest)?"正在等待原生确认…":""))+'</p>';
   restoreFields(card,card.dataset.draftKey);
   if(fieldIndex>=0){const field=card.querySelectorAll<HTMLInputElement>("input,textarea,select,button")[fieldIndex];field?.focus({preventScroll:true});if(selection&&field?.setSelectionRange)field.setSelectionRange(selection[0],selection[1]);}
-  if(card.querySelector(".interaction-card-body"))card.querySelector(".interaction-card-body")!.scrollTop=scroll;
   [...card.querySelectorAll("details")].forEach((detail,index)=>{if(details[index]!=null)detail.open=details[index];});
+  const scrollBody=card.querySelector(".interaction-scroll")??card.querySelector(".interaction-card-body");if(scrollBody)scrollBody.scrollTop=scroll;
 }
 
 function saveCardDraft():void{
@@ -419,10 +439,15 @@ function updateActivity(row:AgentSession):void{
   const turn=[...(row.turns??[])].reverse().find(entry=>!entry.agentId),anchor=clockAnchors.get(row.runtimeId);
   const elapsed=turn?.startedAtMs!=null?(anchor?anchor.clock+performance.now()-anchor.received:row.clockMs??turn.startedAtMs)-turn.startedAtMs:undefined;
   const timing=busy(row)?durationLabel(elapsed):recordDuration(turn);
-  const tasks=(row.tasks??[]).filter(task=>runningStates.includes(task.state));
-  const uncertain=(row.tasks??[]).some(task=>["unknown","failed","blocked"].includes(task.state));
+  const tasks=liveTasks(row).filter(task=>runningStates.includes(task.state));
   const state=row.state==="idle"?(turn?"本轮回复已完成":"会话空闲"):labels[row.state]??row.state;
-  byId("activity-text").textContent=[state,timing?(turn?.timeSource==="observed"||turn?.timeSource==="nativeDuration"&&busy(row)?"约 ":"")+timing:"",tasks.length?tasks.length+" 项任务仍在运行":uncertain?"请查看任务状态":""].filter(Boolean).join(" · ");
+  byId("activity-text").textContent=[state,timing?(turn?.timeSource==="observed"||turn?.timeSource==="nativeDuration"&&busy(row)?"约 ":"")+timing:"",tasks.length?tasks.length+" 项任务仍在运行":""].filter(Boolean).join(" · ");
+  byId("activity-bar").hidden=!busy(row);
+  let summary=byId("turn-summary");
+  if(!summary){summary=document.createElement("p");summary.id="turn-summary";summary.className="turn-summary";messages.append(summary);}
+  summary.hidden=busy(row)||!turn||runningStates.includes(turn.state);
+  summary.textContent=[state,timing?(turn?.timeSource==="observed"?"约 ":"")+timing:"",byId("usage-summary").textContent??""].filter(Boolean).join(" · ");
+  if(!summary.hidden&&messages.lastElementChild!==summary)messages.append(summary);
   updateTaskTimers(row);
 }
 function updateTaskTimers(row:AgentSession):void{
@@ -458,6 +483,11 @@ draft.onkeydown=event=>{if(event.key==="Enter"&&(event.ctrlKey||event.metaKey)&&
 byId("agent-stop").onclick=()=>{const row=active();if(row?.turnId)void command({action:"stopTurn",turnId:row.turnId},row).catch(()=>{});};
 model.onchange=()=>void command({action:"setModel",model:model.value}).catch(()=>{const row=active();if(row)model.value=row.model;});
 byId("dismiss-notice").onclick=()=>showNotice();
+byId("dismiss-native-notice").onclick=()=>{
+  const key=byId("native-notice").dataset.noticeKey;if(key)dismissedNotices.add(key);
+  if(dismissedNotices.size>256)dismissedNotices.delete(dismissedNotices.values().next().value!);
+  transientNotice=undefined;const row=active();if(row)renderNotices(row);
+};
 byId("sheet-layer").querySelector(".sheet-scrim")!.addEventListener("click",()=>closeSheet());
 document.addEventListener("keydown",event=>{
   if(event.key==="Escape"&&sheetType){event.preventDefault();closeSheet();}

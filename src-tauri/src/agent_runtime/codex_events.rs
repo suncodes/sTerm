@@ -83,12 +83,50 @@ pub fn notice(method:&str,p:&Value,agent:&str)->Option<Value>{
     let mut text=message.chars().take(4000).collect::<String>();
     if method=="model/rerouted"{text=format!("{} → {} · {}",p["fromModel"].as_str().unwrap_or_default(),p["toModel"].as_str().unwrap_or_default(),message);}
     if let Some(details)=p["details"].as_str(){text.push('\n');text.extend(details.chars().take(4000));}
-    Some(json!({"id":format!("{agent}:{method}:{}",p["reviewId"].as_str().or(p["run"]["id"].as_str()).or(p["itemId"].as_str()).or(p["server"].as_str()).or(p["turnId"].as_str()).unwrap_or_default()),"agentId":agent,"title":title,"message":text,"state":p.get("review").and_then(|review|review.get("status")).or(p.get("run").and_then(|run|run.get("status"))),"severity":if method.contains("Warning")||method=="warning"||p["review"]["status"]=="denied"{"warning"}else{"info"},"updatedAtMs":super::presentation::now_ms()}))
+    let family=match method{
+        "hook/started"|"hook/completed"=>"hook",
+        "item/autoApprovalReview/started"|"item/autoApprovalReview/completed"=>"autoApprovalReview",
+        "modelProvider/authRecoveryStarted"|"modelProvider/authRecoveryCompleted"=>"authRecovery",
+        _=>method,
+    };
+    let state=p["review"]["status"].as_str().or(p["run"]["status"].as_str()).or(p["status"].as_str()).or(p["state"].as_str());
+    let phase=if method.ends_with("/started")||method.ends_with("RecoveryStarted"){Some("running")}
+        else if method.ends_with("/completed")||method.ends_with("RecoveryCompleted"){Some("completed")}
+        else if ["mcpServer/startupStatus/updated","model/verification","model/safetyBuffering/updated"].contains(&method){
+            match state{
+                Some("running"|"inProgress"|"in_progress"|"pending"|"starting"|"retrying"|"verifying"|"buffering")=>Some("running"),
+                Some("completed"|"succeeded"|"ready"|"failed"|"denied"|"cancelled"|"canceled"|"stopped"|"idle")=>Some("completed"),
+                _=>None,
+            }
+        }else{None};
+    let entity=p["reviewId"].as_str().or(p["run"]["id"].as_str()).or(p["itemId"].as_str()).or(p["server"].as_str()).or(p["turnId"].as_str()).unwrap_or_default();
+    let severity=if matches!(state,Some("failed"|"error"))||p.get("error").is_some_and(|error|!error.is_null()){ "error" }
+        else if method.contains("Warning")||method=="warning"||state==Some("denied"){"warning"}else{"info"};
+    let title=if method=="model/safetyBuffering/updated"&&phase==Some("completed"){"原生响应处理已结束"}else{title};
+    Some(json!({"id":format!("{agent}:{family}:{entity}"),"agentId":agent,"turnId":p["turnId"],"title":title,"message":text,"state":state,"phase":phase,"severity":severity,"updatedAtMs":super::presentation::now_ms()}))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn notice_progress_updates_one_record_and_keeps_native_failure() {
+        for (started,completed) in [
+            ("hook/started","hook/completed"),
+            ("item/autoApprovalReview/started","item/autoApprovalReview/completed"),
+            ("modelProvider/authRecoveryStarted","modelProvider/authRecoveryCompleted"),
+        ]{
+            let start=notice(started,&json!({"turnId":"turn","itemId":"item","reviewId":"review","run":{"id":"run","status":"running"}}),"child").unwrap();
+            let end=notice(completed,&json!({"turnId":"turn","itemId":"item","reviewId":"review","run":{"id":"run","status":"failed"}}),"child").unwrap();
+            assert_eq!(start["id"],end["id"]);assert_eq!(start["phase"],"running");
+            assert_eq!(end["phase"],"completed");assert_eq!(end["severity"],"error");
+            assert_eq!(start["agentId"],"child");assert_eq!(start["turnId"],"turn");
+        }
+        let start=notice("mcpServer/startupStatus/updated",&json!({"server":"tool","status":"starting"}),"").unwrap();
+        let end=notice("mcpServer/startupStatus/updated",&json!({"server":"tool","status":"ready"}),"").unwrap();
+        assert_eq!(start["id"],end["id"]);assert_eq!(start["phase"],"running");assert_eq!(end["phase"],"completed");
+        assert!(notice("warning",&json!({"message":"Read this"}),"").unwrap()["phase"].is_null());
+    }
     #[test]
     fn indexed_reasoning_prefers_summary_and_retains_raw_blocks() {
         let raw=incremental_item("item/reasoning/textDelta",&json!({"itemId":"r","contentIndex":0,"delta":"raw"}),"turn","child",None).unwrap();

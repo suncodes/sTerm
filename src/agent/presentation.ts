@@ -65,6 +65,12 @@ export function itemHtml(item:AgentItem,row:AgentSession):string {
   if(data.stdin)body+='<details><summary>向命令输入</summary><pre>'+escape(data.stdin)+'</pre></details>';
   if(data.progress)body+='<p class="tool-progress">'+escape(data.progress)+'</p>';
   body+=attachmentHtml(data.content)+attachmentHtml((data.result as Record<string,unknown>|undefined)?.content)+attachmentHtml(data.contentItems)+attachmentHtml(data.output);
+  if(Array.isArray(data.questionReplies)){
+    for(const reply of data.questionReplies as {question:string;answer:string;secret?:boolean}[]){
+      const answer=reply.secret?"已提交秘密回答":reply.answer;
+      body+='<details class="question-answer"><summary>已回答 · '+escape(answer.replace(/\s+/g," ").slice(0,96))+'</summary><blockquote>'+escape(reply.question)+'</blockquote><pre>'+escape(answer)+'</pre></details>';
+    }
+  }
   if(item.text&&native!=="webSearch"){
     let text=item.text;if(command&&text.startsWith(String(command)+"\n\n"))text=text.slice(String(command).length+2);
     if(text)body+=item.kind==="tool"||item.kind==="user"?'<pre>'+escape(text)+'</pre>':markdown(text);

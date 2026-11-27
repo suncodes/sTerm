@@ -50,11 +50,10 @@
     <section id="interaction-card" class="interaction-card" aria-label="当前待处理交互" hidden></section>
     <section id="blocked-card" class="interaction-card blocked-card" aria-label="安全阻断处理" hidden></section>
     <div id="task-bar" class="queue-bar" hidden><span id="task-text"></span><button data-open="tasks">查看任务</button></div>
-    <div id="native-notice" class="native-notice" hidden><span id="native-notice-text"></span><button data-open="notices">详情</button></div>
-    <div id="usage-summary" class="usage-summary" hidden></div>
+    <div id="native-notice" class="native-notice" hidden><span id="native-notice-text"></span><button data-open="notices">记录</button><button id="dismiss-native-notice" class="touch-button" aria-label="关闭运行提示">×</button></div>
     <div id="agent-activity-detail" class="activity-detail" role="status" hidden></div>
     <section id="agent-approvals" class="approval-dock" aria-label="工具审批" hidden></section>
-    <div id="activity-bar" class="activity-bar"><span id="activity-dot" class="status-dot"></span><span id="activity-text">等待会话</span><button id="agent-stop" class="stop-button" disabled hidden><svg class="icon"><use href="#i-stop"/></svg>停止生成</button></div>
+    <div id="activity-bar" class="activity-bar"><span id="activity-dot" class="status-dot"></span><span id="activity-text">等待会话</span><span id="usage-summary" class="usage-summary" hidden></span><button id="agent-stop" class="stop-button" disabled hidden><svg class="icon"><use href="#i-stop"/></svg>停止生成</button></div>
     <div id="queue-bar" class="queue-bar" hidden><span><svg class="icon"><use href="#i-check"/></svg><span id="queue-text"></span></span><button data-open="queue">查看</button></div>
     <section id="composer" class="composer"><form id="agent-composer"><div class="draft-field"><label class="sr-only" for="agent-draft">发送给当前 Agent</label><textarea id="agent-draft" rows="2" placeholder="继续这个会话…" spellcheck="false" disabled></textarea><div class="draft-footer"><span id="agent-input-hint">电脑端与网页均可操作</span><span class="key-hint">Ctrl + Enter</span></div></div><button id="queue-add" type="button" class="subtle-button" hidden>加入队列</button><button id="agent-send" type="submit" class="send-button" disabled>发送</button></form></section>
     <div id="composer-unavailable" class="composer-unavailable" hidden></div>

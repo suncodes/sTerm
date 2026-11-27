@@ -125,3 +125,88 @@ test("native turn ending and browser-only reattachment cannot enable a blocked s
   const attached=applyChanges({...original,seq:4},[{seq:5,events:[{type:"ready",sessionId:original.sessionId,model:"a",models:[],capabilities:{send:true}}]}]);
   assert.equal(attached.state,"blocked");assert.equal(attached.activity.reviewId,original.activity.reviewId);
 });
+
+const displayBundle = await build({entryPoints:["src/agent/display.ts"],bundle:true,write:false,format:"esm",platform:"node"});
+const {parseQuestionReplies,conversationItems,liveTasks}=await import("data:text/javascript;base64,"+Buffer.from(displayBundle.outputFiles[0].contents).toString("base64"));
+const noticeBundle = await build({entryPoints:["src/agent/notices.ts"],bundle:true,write:false,format:"esm",platform:"node"});
+const {NoticeTracker,activeNotices}=await import("data:text/javascript;base64,"+Buffer.from(noticeBundle.outputFiles[0].contents).toString("base64"));
+const reply=(call,index,question,answer)=>({questionItemId:JSON.stringify(["request_user_input_async",call,index]),question,answer});
+const envelope=value=>"<send_user_message_question_reply>\n"+JSON.stringify(value)+"\n</send_user_message_question_reply>";
+
+test("async answers require a complete valid envelope and native question identity",()=>{
+  const one=reply("call",0,"Target?","D:");
+  assert.equal(parseQuestionReplies(envelope(one))[0].answer,"D:");
+  assert.equal(parseQuestionReplies("  "+envelope([one])+"  ")[0].call,"call");
+  for(const text of [
+    "Explain "+envelope([one]),envelope([]),envelope([one,{answer:"bad"}]),
+    envelope({...one,questionItemId:'["another_tool","call",0]'}),
+    envelope({...one,questionItemId:'["request_user_input_async","call",-1]'}),
+    envelope({...one,questionItemId:'["request_user_input_async","call",0.5]'}),
+    envelope({...one,answer:42}),"<send_user_message_question_reply>{broken}</send_user_message_question_reply>",
+  ]) assert.equal(parseQuestionReplies(text),undefined,text);
+});
+
+test("live and refreshed async answers fold into the right agent question without mutating transport",()=>{
+  const source={id:"call",kind:"assistant",text:"Choose target",agentId:"",data:{id:"call",questions:[{title:"Full target question"}]}};
+  const child={...source,id:"child:call",agentId:"child",data:{...source.data}};
+  const answer={id:"answer",kind:"user",text:envelope([reply("call",0,"Quoted target?","D:")]),agentId:""};
+  const original={...session(),agent:"codex",items:[source,child]};
+  const next=applyChanges(original,[{seq:5,events:[{type:"upsert",item:answer}]}]);
+  const displayed=conversationItems(next);
+  assert.deepEqual(displayed.map(item=>item.id),["call","child:call"]);
+  assert.equal(displayed[0].data.questionReplies[0].question,"Full target question");
+  assert.equal(displayed[0].data.questionReplies[0].answer,"D:");
+  assert.equal(displayed[1].data.questionReplies,undefined);
+  assert.equal(source.data.questionReplies,undefined);
+  assert.equal(next.items[2].text,answer.text);
+  assert.deepEqual(conversationItems(JSON.parse(JSON.stringify(next))),displayed);
+});
+
+test("unmatched async answers remain readable and mixed replies retain fallback and attachments",()=>{
+  const source={id:"call",kind:"assistant",agentId:"",data:{questions:[{title:"Secret",secret:true}]}};
+  const answer={id:"a",kind:"user",agentId:"",text:envelope([reply("call",0,"Secret?","never-display"),reply("missing",0,"Missing question","B")]),data:{content:[{type:"image",path:"attachment"}]}};
+  const displayed=conversationItems({...session(),agent:"codex",items:[source,answer]});
+  assert.equal(displayed.length,2);assert.equal(displayed[0].data.questionReplies[0].answer,"已提交秘密回答");
+  assert(!JSON.stringify(displayed).includes("never-display"));
+  assert.equal(displayed[1].text,"");assert.equal(displayed[1].data.questionReplies[0].question,"Missing question");
+  assert.equal(displayed[1].data.questionReplies[0].answer,"B");assert.equal(displayed[1].data.content[0].type,"image");
+  const literal={...answer,text:"Explain "+envelope([reply("call",0,"Q","A")])};
+  assert.equal(conversationItems({...session(),agent:"codex",items:[literal]})[0].text,literal.text);
+  assert.equal(conversationItems({...session(),agent:"claude",items:[answer]})[0].text,answer.text);
+});
+
+test("task activity excludes foreground commands and terminal history while preserving independent and uncertain work",()=>{
+  const tasks=[
+    {id:"foreground",kind:"shell",state:"running",data:{backgroundConfirmed:false}},
+    {id:"complete",kind:"agent",state:"completed"},{id:"failed",kind:"agent",state:"failed"},
+    {id:"background",kind:"shell",state:"running",data:{backgroundConfirmed:true}},
+    {id:"child",kind:"agent",state:"waiting"},{id:"disconnected",kind:"agent",state:"unknown"},
+  ];
+  const row={...session(),state:"idle",tasks};
+  assert.deepEqual(liveTasks(row).map(task=>task.id),["background","child","disconnected"]);
+  assert.deepEqual(liveTasks({...row,tasks:tasks.map(task=>({...task,state:"completed"}))}),[]);
+  assert.equal(row.tasks.length,6);
+});
+
+test("notices seed snapshots silently, ignore timestamp replay and report meaningful progress changes once",()=>{
+  const tracker=new NoticeTracker(),notice={id:"review",title:"Review",phase:"running",message:"Reviewing",updatedAtMs:1};
+  const row={...session(),notices:[notice]};
+  assert.deepEqual(tracker.update(row),[]);
+  assert.deepEqual(tracker.update({...row,notices:[{...notice,updatedAtMs:2}]}),[]);
+  const completed={...notice,phase:"completed",message:"Done",updatedAtMs:3};
+  assert.deepEqual(tracker.update({...row,notices:[completed]}),[completed]);
+  assert.deepEqual(tracker.update({...row,notices:[completed]}),[]);
+  assert.deepEqual(tracker.update({...row,sessionId:"another"}),[]);
+  assert.deepEqual(tracker.update({...row,notices:[completed]}),[]);
+});
+
+test("progress strips follow current turns and independent children and clear after completion",()=>{
+  const row={...session(),tasks:[{id:"child",state:"running"}],notices:[
+    {id:"hook",phase:"running",turnId:"turn"},{id:"old",phase:"running",turnId:"old"},
+    {id:"child-hook",phase:"running",agentId:"child"},{id:"done",phase:"completed"},
+    {id:"info",message:"Historical notice"},
+  ]};
+  assert.deepEqual(activeNotices(row).map(notice=>notice.id),["hook","child-hook"]);
+  assert.deepEqual(activeNotices({...row,state:"idle"}).map(notice=>notice.id),["child-hook"]);
+  assert.deepEqual(activeNotices({...row,state:"idle",tasks:[{id:"child",state:"completed"}]}),[]);
+});

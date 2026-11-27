@@ -101,7 +101,7 @@ try:
  order=browser.evaluate('[...document.querySelectorAll("#agent-messages>.agent-item")].map(i=>i.dataset.item)')
  assert order==["before","thought","command","after"],order
  row["items"][1]["status"]="completed";row["state"]="idle";row["turns"][0].update(state="completed",completedAtMs=now+24000,durationMs=25000);row["seq"]+=1
- browser.until('document.querySelector("#activity-text").textContent.includes("25 秒")')
+ browser.until('document.querySelector("#turn-summary")?.textContent.includes("25 秒") && document.querySelector("#activity-bar").hidden')
  browser.call("Page.reload")
  browser.until('document.querySelectorAll("#agent-messages>.agent-item").length===4')
  assert browser.evaluate('[...document.querySelectorAll("#agent-messages>.agent-item")].map(i=>i.dataset.item)')==order
@@ -147,6 +147,118 @@ try:
  browser.until('document.querySelector("#interaction-card").hidden')
  assert commands[-1]["response"]["content"]=={"name":"hello","choice":False,"features":["B"]}
  print("PASS Chrome readable approval, mobile layout, independent background work and form defaults",flush=True)
+ row["tasks"]=[
+  {"id":"foreground","kind":"shell","state":"running","title":"Foreground command","data":{"backgroundConfirmed":False,"itemId":"command"}},
+  {"id":"failed","kind":"agent","state":"failed","title":"Past failure"},
+  {"id":"done","kind":"shell","state":"completed","title":"Completed background","data":{"backgroundConfirmed":True}},
+ ];row["seq"]+=1
+ browser.until('document.querySelector("#task-bar").hidden && !document.querySelector("#activity-text").textContent.includes("请查看")')
+ browser.evaluate('document.querySelector("[data-open=more]").click()')
+ browser.until('Boolean(document.querySelector("#sheet [data-open=tasks]"))')
+ browser.evaluate('document.querySelector("#sheet [data-open=tasks]").click()')
+ browser.until('document.querySelector("#sheet-title").textContent==="任务记录"')
+ assert browser.evaluate('document.querySelector("#sheet").textContent.includes("Past failure")')
+ browser.evaluate('document.querySelector("[data-close-sheet]").click()')
+ row["tasks"].append({"id":"child-live","kind":"agent","state":"running","title":"Independent child"});row["seq"]+=1
+ browser.until('!document.querySelector("#task-bar").hidden && document.querySelector("#task-text").textContent.includes("1 项任务进行中")')
+ row["tasks"][-1]["state"]="completed";row["seq"]+=1
+ browser.until('document.querySelector("#task-bar").hidden')
+ print("PASS Chrome completed/failed/foreground tasks leave activity while history and independent children remain available",flush=True)
+
+ row["notices"]=[{"id":"info","title":"Native info","message":"Completed ordinary notice","severity":"info"}];row["seq"]+=1
+ browser.until('!document.querySelector("#toast").hidden && document.querySelector("#toast").textContent==="Completed ordinary notice"')
+ assert browser.evaluate('document.querySelector("#native-notice").hidden')
+ browser.call("Page.reload")
+ browser.until('document.querySelectorAll("#agent-messages>.agent-item").length===4')
+ assert browser.evaluate('document.querySelector("#toast").hidden && document.querySelector("#native-notice").hidden')
+ row["notices"].append({"id":"warn","title":"Warning","message":"Please review the runtime warning","severity":"warning"});row["seq"]+=1
+ browser.until('!document.querySelector("#native-notice").hidden')
+ tap("#dismiss-native-notice")
+ browser.until('document.querySelector("#native-notice").hidden')
+ row["seq"]+=1;time.sleep(.5)
+ assert browser.evaluate('document.querySelector("#native-notice").hidden')
+ row["notices"][-1]["message"]="Updated runtime warning";row["seq"]+=1
+ browser.until('!document.querySelector("#native-notice").hidden && document.querySelector("#native-notice-text").textContent==="Updated runtime warning"')
+ browser.until('document.querySelector("#native-notice").hidden')
+ row.update(state="running",turnId="turn")
+ row["notices"].append({"id":"hook","turnId":"turn","title":"Hook","message":"Hook is running","severity":"info","phase":"running"});row["seq"]+=1
+ browser.until('!document.querySelector("#native-notice").hidden && document.querySelector("#native-notice-text").textContent==="Hook is running"')
+ row["notices"][-1].update(phase="completed",message="Hook completed");row["seq"]+=1
+ browser.until('document.querySelector("#native-notice").hidden')
+ row["notices"][-1].update(phase="running",message="Another hook");row["seq"]+=1
+ browser.until('!document.querySelector("#native-notice").hidden')
+ row.update(state="retrying",activity={"kind":"retrying","message":"API retry in progress"});row["seq"]+=1
+ browser.until('!document.querySelector("#agent-activity-detail").hidden')
+ row["state"]="idle";row["seq"]+=1
+ browser.until('document.querySelector("#native-notice").hidden && document.querySelector("#agent-activity-detail").hidden')
+ row["error"]="Historical runtime error";row["seq"]+=1
+ browser.until('!document.querySelector("#agent-notice").hidden')
+ tap("#dismiss-notice");row["seq"]+=1;time.sleep(.5)
+ assert browser.evaluate('document.querySelector("#agent-notice").hidden')
+ row["error"]=None;row["activity"]={};row["seq"]+=1
+ print("PASS Chrome notices do not replay on refresh, warnings dismiss/expire, progress/retry clears and dismissed errors stay closed",flush=True)
+
+ def async_reply(call,index,title,answer):
+  return {"questionItemId":json.dumps(["request_user_input_async",call,index],separators=(",",":")),"question":title,"answer":answer}
+ def reply_text(replies):return "<send_user_message_question_reply>\n"+json.dumps(replies)+"\n</send_user_message_question_reply>"
+ row["items"].extend([
+  item("call-target","assistant","Choose a workspace",id="call-target",questions=[{"title":"Which workspace?"}]),
+  item("answer-target","user",reply_text([async_reply("call-target",0,"Which workspace?","D:")])),
+  item("answer-orphan","user",reply_text([async_reply("missing-call",0,"Choose target","B <safe>")])),
+  item("call-secret","assistant","Enter a secret",id="call-secret",questions=[{"title":"Secret value","secret":True}]),
+  item("answer-secret","user",reply_text([async_reply("call-secret",0,"Secret value","must-never-render")])),
+ ]);row["seq"]+=1
+ browser.until('Boolean(document.querySelector("[data-item=call-target] .question-answer"))')
+ assert browser.evaluate('!document.querySelector("[data-item=answer-target]") && !document.querySelector("[data-item=answer-secret]") && !document.querySelector("#agent-messages").textContent.includes("send_user_message_question_reply") && !document.querySelector("#agent-messages").textContent.includes("must-never-render")')
+ assert browser.evaluate('document.querySelector("[data-item=call-target] .question-answer summary").textContent.includes("D:") && document.querySelector("[data-item=answer-orphan]").textContent.includes("B <safe>") && !document.querySelector("[data-item=answer-orphan] safe")')
+ browser.call("Page.reload")
+ browser.until('Boolean(document.querySelector("[data-item=call-secret] .question-answer"))')
+ assert browser.evaluate('!document.querySelector("[data-item=answer-target]") && !document.querySelector("#agent-messages").textContent.includes("must-never-render")')
+ print("PASS Chrome native async answers fold into questions, missing questions have readable fallback, secrets redact and refresh agrees",flush=True)
+
+ long_command="Write-Output 'preview'\n"+"\n".join("Write-Output 'script line "+str(i)+"'" for i in range(180))
+ set_interaction(interaction("long-approval","approval",decisions=[
+  {"label":"Approve once","value":"accept"},
+  {"label":"Remember rule","value":{"acceptWithExecpolicyAmendment":{"execpolicyAmendment":["powershell","-Command",long_command]}}},
+  {"label":"Cancel","value":"cancel"},
+ ],context={"command":long_command,"cwd":"D:/isolated","input":{"file_path":"D:/isolated/file.txt","content":"file detail\n"*100}}))
+ browser.until('Boolean(document.querySelector("#interaction-card .approval-command-detail"))')
+ assert browser.evaluate('!document.querySelector(".approval-command-detail").open && document.querySelector(".interaction-scroll").textContent.includes("后续匹配该规则的命令可自动获准")')
+ for width,height in [(1280,900),(760,800),(600,800),(520,800),(390,844),(360,640),(390,450)]:
+  browser.call("Emulation.setDeviceMetricsOverride",{"width":width,"height":height,"deviceScaleFactor":1,"mobile":width<760})
+  browser.until(f"innerWidth==={width} && innerHeight==={height}")
+  browser.evaluate('(async()=>{await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);})()')
+  geometry=browser.evaluate('(()=>{const rect=id=>{const r=document.getElementById(id).getBoundingClientRect();return {x:r.x,w:r.width,y:r.y,b:r.bottom}};return {messages:rect("agent-messages"),card:rect("interaction-card"),composer:rect("agent-composer"),body:rect("conversation"),buttons:[...document.querySelectorAll(".interaction-footer button")].map(b=>{const r=b.getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height,visible:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===b}}),overflow:document.documentElement.scrollWidth};})()')
+  assert abs(geometry["messages"]["x"]-geometry["card"]["x"])<1.1 and abs(geometry["composer"]["x"]-geometry["card"]["x"])<1.1,(width,geometry)
+  assert abs(geometry["messages"]["w"]-geometry["card"]["w"])<1.1 and abs(geometry["composer"]["w"]-geometry["card"]["w"])<1.1,(width,geometry)
+  assert geometry["overflow"]<=width and geometry["body"]["b"]-geometry["body"]["y"]>20,(width,geometry)
+  assert all(button["visible"] and button["height"]>=44 and button["bottom"]<=geometry["card"]["b"] for button in geometry["buttons"]),(width,geometry)
+ assert browser.evaluate('(()=>{const body=document.querySelector(".interaction-scroll").getBoundingClientRect(),reason=document.querySelector(".approval-reason").getBoundingClientRect(),preview=document.querySelector(".approval-command pre").getBoundingClientRect();return reason.top>=body.top && preview.bottom<=body.bottom;})()')
+ shot("compact-approval-mobile.png")
+ tap(".approval-command-detail>summary")
+ browser.until('document.querySelector(".approval-command-detail").open')
+ browser.evaluate('document.querySelector(".interaction-scroll").scrollTop=400')
+ saved_scroll=browser.evaluate('document.querySelector(".interaction-scroll").scrollTop')
+ row["interactions"][0]["detail"]="Updated native approval reason";row["seq"]+=1
+ browser.until('document.querySelector("#interaction-card .approval-reason").textContent==="Updated native approval reason"')
+ assert browser.evaluate('document.querySelector(".approval-command-detail").open')
+ assert abs(browser.evaluate('document.querySelector(".interaction-scroll").scrollTop')-saved_scroll)<1
+ assert browser.evaluate('[...document.querySelectorAll(".interaction-footer button")].every(b=>{const r=b.getBoundingClientRect();return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===b})')
+ tap('[data-interaction-decision="0"]')
+ browser.until('document.querySelector("#interaction-card").hidden')
+ assert commands[-1]["response"]=={"decision":"accept"}
+ print("PASS Chrome shared content column at all breakpoints, long command/rule folding and visible mobile approval actions",flush=True)
+ set_interaction(interaction("all-decisions","approval",decisions=[
+  {"label":"批准一次","value":"accept"},{"label":"本会话允许","value":"acceptForSession"},
+  {"label":"允许并记住命令规则","value":{"acceptWithExecpolicyAmendment":{"execpolicyAmendment":["powershell","-Command",long_command]}}},
+  {"label":"拒绝此操作","value":"decline"},{"label":"取消本次请求","value":"cancel"},
+ ],context={"command":long_command}))
+ browser.until('document.querySelectorAll("#interaction-card .interaction-footer button").length===5')
+ assert browser.evaluate('(()=>{const card=document.querySelector("#interaction-card").getBoundingClientRect(),footer=document.querySelector(".interaction-footer").getBoundingClientRect();return footer.bottom<=card.bottom && document.querySelector("#conversation").clientHeight>20;})()')
+ tap('[data-interaction-decision="4"]')
+ browser.until('document.querySelector("#interaction-card").hidden')
+ assert commands[-1]["response"]=={"decision":"cancel"}
+ print("PASS Chrome all five native decisions remain reachable in a short viewport",flush=True)
  set_block()
  row["interactions"]=[interaction("old-async","asyncQuestion",False,questions=[{"id":"q","title":"Stale question","options":[]}])];row["seq"]+=1
  browser.until('!document.querySelector("#blocked-card").hidden && document.querySelector("#blocked-card").textContent.includes("没有可用的继续确认")')
