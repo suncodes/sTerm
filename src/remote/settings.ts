@@ -39,8 +39,8 @@ export function renderRemoteSettings(controller: RemoteController): { page: HTML
     </div>
     <div data-panel="permissions" role="tabpanel" hidden>
       <label class="settings-row rs-default"><span><span class="settings-label">默认分享会话</span><span class="rs-description">新会话自动出现在已配对的浏览器中</span></span><input data-el="share" class="settings-switch" type="checkbox"></label>
-      <label class="settings-row rs-default"><span><span class="settings-label">默认允许输入</span><span class="rs-description">Agent 会话两侧均可操作；普通终端由手机接管后输入</span></span><input data-el="input" class="settings-switch" type="checkbox"></label>
-      <p class="rs-inherit-hint">默认设置即时应用于所有「跟随默认」的会话。</p><div class="rs-session-heading">当前会话 <span data-el="session-count" class="rs-muted"></span></div><div data-el="sessions"></div><p class="settings-hint rs-footnote">${remoteIcon("info")}Agent 分享允许双端操作；普通终端保留接管与收回控制权。</p>
+      <label class="settings-row rs-default"><span><span class="settings-label">默认允许输入</span><span class="rs-description">Agent 可直接操作；终端接管后输入，两种模式可同时使用</span></span><input data-el="input" class="settings-switch" type="checkbox"></label>
+      <p class="rs-inherit-hint">默认设置即时应用于所有「跟随默认」的会话。</p><div class="rs-session-heading">当前会话 <span data-el="session-count" class="rs-muted"></span></div><div data-el="sessions"></div><p class="settings-hint rs-footnote">${remoteIcon("info")}Agent 允许双端操作；终端模式保留接管与收回控制权。</p>
     </div>
     <div data-panel="public" role="tabpanel" hidden>
       <div class="rs-public-heading"><span class="settings-label">公网连接</span><span data-el="tunnel-state" class="rs-state off">未连接</span></div><div class="rs-segment rs-providers"><button data-provider="cloudflare" aria-pressed="true">Cloudflare Tunnel</button><button data-provider="ngrok" aria-pressed="false">ngrok</button></div><p data-el="provider-hint" class="rs-provider-hint"></p>
@@ -151,7 +151,7 @@ export function renderRemoteSettings(controller: RemoteController): { page: HTML
     find<HTMLInputElement>("share").disabled = busy;
     find<HTMLInputElement>("input").disabled = busy || !controller.defaults.share;
     find("clients").textContent = String(status?.clients ?? 0);
-    find("shared-count").textContent = String(controller.sessions.filter(session => session.isRemoteShared).length+controller.agents.filter(row=>row.shared).length);
+    find("shared-count").textContent = String(controller.sharedCount);
     find<HTMLButtonElement>("revoke").disabled = busy;
     find<HTMLButtonElement>("start").disabled = busy;
     find<HTMLInputElement>("password-enabled").checked = passwordEnabled || passwordEditing;
@@ -191,13 +191,13 @@ export function renderRemoteSettings(controller: RemoteController): { page: HTML
         const detail = document.createElement("small");
         const policy = controller.policy(session);
         const permission = resolveRemotePermission(policy, controller.defaults);
-        const effective = !session.isRunning ? "未运行" : !permission.share ? "未分享" : session.isRemotePaused ? "已暂停分享，请重新选择权限恢复" : permission.input ? (session.isAgentMode?"允许操作":"允许接管") : "只读";
+        const effective = !session.isRunning ? "未运行" : !permission.share ? "未分享" : session.isRemotePaused ? "已暂停分享，请重新选择权限恢复" : permission.input ? (session.isAgentMode?"Agent 可操作 · 终端可接管":"允许接管") : "只读";
         detail.textContent = (session.isAgentMode?"Agent 已接入 · ":"")+(policy==="inherit"?"跟随默认":"单独设置")+" · "+effective;
         description.append(name, detail);
         const select = document.createElement("select");
         select.dataset.session = String(session.id);
         select.setAttribute("aria-label", `${session.title} 的远程权限`);
-        for (const [value, label] of [["inherit", "跟随默认"], ["off", "不分享"], ["readonly", "只读"], ["control", session.isAgentMode?"允许操作":"允许接管"]]) select.add(new Option(label, value));
+        for (const [value, label] of [["inherit", "跟随默认"], ["off", "不分享"], ["readonly", "只读"], ["control", session.isAgentMode?"Agent 可操作 · 终端可接管":"允许接管"]]) select.add(new Option(label, value));
         select.value = policy; select.disabled = busy;
         select.onchange = () => void operation(() => controller.setPolicy(session, select.value as RemotePolicy));
         row.append(dot, description, select); list.append(row);

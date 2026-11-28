@@ -4,6 +4,24 @@ All notable changes to sTerm are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-11-28
+
+### Added
+
+- Automatically connect Claude Code and Codex launched in sTerm shells to a structured remote Agent page, with shared native sessions, history, streaming output, model settings, execution permissions, and turn controls.
+- Support native approvals, plan confirmation, questions, MCP forms and authorization links, Codex input queues, visible retry states, subagent activity, and confirmed background task output and duration.
+
+### Changed
+
+- Present approvals and questions above the composer with readable prompts, compact paginated choices, preserved drafts, fixed actions, and responsive desktop columns; expand pending asynchronous questions by default while respecting manual collapse.
+- Use lightweight thinking and command rows, preserve interleaved streaming order, reduce repeated Agent labels, and keep completed task history and runtime notices out of the active task area.
+- Share terminal and Agent views of the same tab under the same permission settings, retain terminal takeover and release, and use matching Terminal / Agent navigation on both pages.
+
+### Fixed
+
+- Keep unanswered asynchronous questions available while Codex continues working, prevent duplicate shared-session counts, and restore shell state after Agent exit.
+- Handle native safety blocks separately from approvals, expose available continuation details and explicit confirmation on mobile, and reject stale or duplicate recovery requests.
+
 ## [0.2.7] - 2026-11-24
 
 ### Fixed

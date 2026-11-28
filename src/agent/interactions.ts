@@ -40,7 +40,9 @@ export function interactionHtml(item: AgentInteraction, enabled: boolean, row?:A
     for (const [index,q] of (item.data.questions ?? []).entries()) {
       body += '<fieldset data-question-id="'+e(q.id)+'"'+(index?' hidden':"")+'><legend tabindex="-1">'+e(q.header ? q.header + " · " : "")+e(q.title)+(q.multiSelect ? "（可多选）" : "")+'</legend>';
       if (q.preview) body += '<pre class="detail-code">'+e(q.preview)+'</pre>';
+      if(q.options?.length)body+='<div class="question-options"'+(q.options.length>=4&&q.options.every(option=>!option.preview)?' data-compact-options':"")+'>';
       for (const [choice,option] of (q.options ?? []).entries()) body += '<label class="question-option"><input type="'+(q.multiSelect ? "checkbox" : "radio")+'" name="q'+index+'" data-field-key="'+e(JSON.stringify([q.id,"choice",option.label]))+'" value="'+choice+'"'+disabled+'><span><strong>'+e(option.label)+'</strong>'+(option.description?'<small>'+e(option.description)+'</small>':"")+(option.preview?'<pre class="detail-code">'+e(option.preview)+'</pre>':"")+'</span></label>';
+      if(q.options?.length)body+="</div>";
       if(q.other!==false||!q.options?.length){
         const notes='<label class="question-notes"><span'+(q.options?.length?' class="sr-only"':"")+'>'+(q.options?.length ? "其他回答 / 补充说明" : "你的回答")+'</span>'+(q.secret?'<input type="password" name="notes'+index+'" data-field-key="'+e(JSON.stringify([q.id,"notes"]))+'" autocomplete="off" maxlength="8192"'+disabled+'>':'<textarea name="notes'+index+'" data-field-key="'+e(JSON.stringify([q.id,"notes"]))+'" maxlength="8192" rows="1"'+disabled+'></textarea>')+'</label>';
         body+=q.options?.length?'<details class="question-other" data-question-other="'+e(q.id)+'"><summary>其他回答 / 补充说明<span data-notes-state></span></summary>'+notes+'</details>':notes;

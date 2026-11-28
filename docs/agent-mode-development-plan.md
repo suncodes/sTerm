@@ -13,10 +13,11 @@
 ## 当前实施结果
 
 - P0–P4 的本地共享主链已落地：原生 ConPTY + Claude Mod / Codex app-server + 结构化网页。
+- 2026-11-28：按确认后的交互调整为终端与 Agent 同时分享；异步问题与阻塞问题均默认展开，不因 Agent 继续执行或正常回合结束自动收起。队列展示与语义保留。双通道权限、真实 TerminalSession 接管/归还方法及 Chrome 卡片生命周期回归通过；详细记录见 agent-rendering-development-plan.md。
 - 已使用两个 Claude、两个 Codex 验证独立路由；多个 Codex thread 共用一个认证 loopback app-server，Claude 共用一个本地桥接端口。
 - 模型、审批、停止、Codex sandbox 设置、刷新、断线、分享降权和手机布局已在本机安装 CLI + Google Chrome + 本地模拟模型上验证。
 - Codex 运行中 thread 的设置更新使用实验接口 thread/settings/update；thread/resume 负责连接/恢复，不能用其配置覆盖来证明设置已经生效。使用 app-server generate-ts --experimental 核对接口。
-- 当前 Claude 权限操作仅提供进入 Plan；Codex 提供只读/工作区写入，均按需审批。任意权限模式、问答与附件仍不提供。
+- Claude 权限操作提供进入 Plan；Codex 已提供原生权限目录及 Read Only / Default / Full Access 等可用模式，问题与审批按原生类型适配。能力边界以使用说明和 agent-interactions.md 为准。
 - 本轮不读取真实 API Key、不连接真实模型网关、不启动公网隧道、不安装或更新 CLI，也不修改已运行安装版的目录和数据。
 - 2026-11-27 续接已完成最后改动的本地复验，并修复生成中结束会话的确认框被轮询关闭、Codex TUI 结束后后台回合继续执行两项问题。隔离 Chrome 联调新增核对真实后台回合、同 Shell 重启与关闭运行中标签；Shell、历史和其他会话的保留均已验证。
 - P5 尚需真实网关验收、更多平台/版本覆盖及发布包检查；本文件下方保留原分阶段计划及退出标准，不能将这些条目全部视为已经验收。
@@ -41,7 +42,7 @@
 - 网页切换活跃会话是改变订阅目标，不会切换其他终端的会话。
 - 首版不包含任意休眠历史的远程恢复、网页创建新进程、附件上传、文件编辑器、终端自定义 UI 全量复刻。
 - 本轮不规划 Pi 适配、Android 原生 App、多机器 Hub、官方云端 Remote Control。
-- 现有终端模式保留原有行为；网页原始按键/PTY 控制与 Agent 双端结构化操作采用不同通道，同一运行实例不同时接受网页原始终端控制和 Agent 操作。
+- 终端模式与 Agent 结构化模式通过各自通道同时支持同一运行实例，沿用统一分享权限；原始终端仍需接管并校验控制 epoch，接管不禁用结构化 Agent 操作。启动 Agent 保留终端分享，Agent 退出后终端继续使用原 Shell。
 
 ## 已有证据与未决项
 

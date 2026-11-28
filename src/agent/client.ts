@@ -20,7 +20,7 @@ let taskTimeline:{key:string;node:HTMLElement;view:TimelineView}|undefined;
 const pendingApprovals=new Set<string>(), submitting=new Set<string>(), queues=new Map<string,string[]>();
 type InteractionDraft={fields:{key:string;value:string;checked:boolean;selected?:boolean[]}[];questionnaire?:QuestionnaireView};
 const interactionDrafts=new Map<string,InteractionDraft>(),expandedComposers=new Set<string>();
-const collapsedInteractions=new Set<string>(),expandedInteractions=new Set<string>(),interactionErrors=new Map<string,string>(),clockAnchors=new Map<string,{received:number;clock:number}>();
+const collapsedInteractions=new Set<string>(),interactionErrors=new Map<string,string>(),clockAnchors=new Map<string,{received:number;clock:number}>();
 const taskOutputs=new Map<string,{text:string;truncated?:boolean}>();
 const pendingBlocks=new Set<string>();
 const noticeTracker=new NoticeTracker(),dismissedNotices=new Set<string>(),seenErrors=new Map<string,string|null>();
@@ -317,7 +317,7 @@ document.addEventListener("click",event=>{
     syncControls();if(!byId("agent-composer").hidden)draft.focus();return;
   }
   if(target?.dataset.taskOutput){const row=active(),taskId=target.dataset.taskOutput;if(!row||!connected)return;target.disabled=true;void request<{text:string;truncated?:boolean}>("/api/agents/"+encodeURIComponent(row.runtimeId)+"/tasks/"+encodeURIComponent(taskId)+"/output").then(output=>{taskOutputs.set(row.runtimeId+":"+row.sessionId+":"+taskId,output);if(taskOutputs.size>32)taskOutputs.delete(taskOutputs.keys().next().value!);if(current===row.runtimeId&&sheetType==="task-detail"&&sheetRequest===taskId)fillSheet();}).catch(error=>{showNotice(error instanceof Error?error.message:String(error));target.disabled=false;});return;}
-  if(target?.dataset.interactionOpen){saveCardDraft();cardRequest=target.dataset.interactionOpen;const row=active();if(row){const key=current+":"+row.sessionId+":"+cardRequest;collapsedInteractions.delete(key);expandedInteractions.add(key);if(sheetType==="task-detail")closeSheet();cardKey="";renderInteractions(row);}return;}
+  if(target?.dataset.interactionOpen){saveCardDraft();cardRequest=target.dataset.interactionOpen;const row=active();if(row){const key=current+":"+row.sessionId+":"+cardRequest;collapsedInteractions.delete(key);if(sheetType==="task-detail")closeSheet();cardKey="";renderInteractions(row);}return;}
   if(target?.hasAttribute("data-collapse-interaction")){saveCardDraft();collapsedInteractions.add(current+":"+active()?.sessionId+":"+cardRequest);cardKey="";const row=active();if(row)renderInteractions(row);return;}
   if(target?.hasAttribute("data-expand-interaction")){sheetRequest=cardRequest;openSheet("interaction");cardKey="";const row=active();if(row)renderInteractions(row);return;}
   if(target?.dataset.task){sheetRequest=target.dataset.task;openSheet("task-detail");return;}
@@ -427,7 +427,7 @@ function renderInteractions(row:AgentSession):void{
   const selected=items.find(item=>item.id===cardRequest);
   if(!selected){card.replaceChildren();delete card.dataset.draftKey;delete card.dataset.interactionId;cardKey="";return;}
   const selectionKey=current+":"+row.sessionId+":"+cardRequest;
-  const collapsed=collapsedInteractions.has(selectionKey)||!selected.blocking&&!expandedInteractions.has(selectionKey);
+  const collapsed=collapsedInteractions.has(selectionKey);
   const inSheet=sheetType==="interaction"&&sheetRequest===cardRequest;
   const nativeItemId=(selected.data.context as Record<string,unknown>|undefined)?.itemId;
   const signature=JSON.stringify([current,selected,collapsed,inSheet,writable(),pendingApprovals.has(current+":"+cardRequest),interactionErrors.get(current+":"+cardRequest),row.items.find(item=>(item.agentId||"")===(selected.agentId||"")&&(item.id===nativeItemId||item.data?.id===nativeItemId))?.data]);

@@ -116,7 +116,6 @@ async fn launch(AxumState(app):AxumState<AppHandle>,Path(id):Path<String>,Connec
         options.cwd=PathBuf::from(&request.cwd).join(&options.cwd).to_string_lossy().into_owned();
     }
     state.hub.retire(binding.tab,binding.generation);
-    if let Some(remote)=app.state::<crate::remote::RemoteState>().current(){remote.unshare(binding.tab,binding.generation);}
     if !PathBuf::from(&options.cwd).is_dir(){return Err(failure("工作目录不存在"))}
     let launch=match launcher::prepare_arguments(&app,&state,binding.tab,binding.generation,&request.agent,&options.cwd,options.resume,options.settings,options.tui).await{
         Ok(launch)=>launch,

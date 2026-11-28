@@ -196,9 +196,6 @@ impl RemoteHub {
     }
 
     pub fn share(&self, mut session: SharedSession) -> Result<(), String> {
-        if self.host.agent_hub().is_some_and(|hub| hub.has_tab(session.id, session.generation)) {
-            return Err("此终端已接入 Agent 模式，请在远程访问设置中分享".into());
-        }
         if session.cols < 2 || session.rows == 0 || session.title.len() > 512 {
             return Err("无效的会话信息".into());
         }
@@ -1100,24 +1097,58 @@ mod tests {
     }
 
     #[test]
-    fn agent_runtime_cannot_be_shared_as_a_raw_terminal() {
-        struct AgentHost(crate::agent_runtime::hub::SharedHub);
+    fn agent_and_raw_terminal_allow_independent_operations_on_the_same_session() {
+        use crate::agent_runtime::{hub::Hub, protocol::{Action, Capabilities, Command, Event}};
+        struct AgentHost { agents:crate::agent_runtime::hub::SharedHub, input:Mutex<Vec<String>> }
         impl RemoteHost for AgentHost {
-            fn agent_hub(&self) -> Option<crate::agent_runtime::hub::SharedHub> { Some(self.0.clone()) }
+            fn agent_hub(&self) -> Option<crate::agent_runtime::hub::SharedHub> { Some(self.agents.clone()) }
             fn snapshot(&self, _:u32, _:u32, _: &str) -> Result<(),String> { Ok(()) }
-            fn write(&self, _:u32, _:u32, _: &str) -> Result<(),String> { Ok(()) }
+            fn write(&self, _:u32, _:u32, data: &str) -> Result<(),String> { self.input.lock().unwrap().push(data.into());Ok(()) }
             fn control_changed(&self, _: &SharedSession) {}
             fn resize(&self, _:u32, _:u32, _:u16, _:u16) -> Result<(),String> { Ok(()) }
             fn asset(&self, _: &str) -> Option<(Vec<u8>, String)> { None }
         }
-        let agents = Arc::new(crate::agent_runtime::hub::Hub::default());
-        agents.register("claude",1,2,"D:/probe".into());
-        let hub = RemoteHub::new(1,vec![],Arc::new(AgentHost(agents)));
-        let session = SharedSession { id:1,generation:2,title:"agent".into(),cols:100,rows:30,allow_control:true,
-            controller:None,epoch:None,seq:0,cwd:None,agent:None,agent_status:None,link_key:None };
-        assert!(hub.share(session).is_err());
-        assert!(hub.status().sessions.is_empty());
+        let agents=Arc::new(Hub::default());
+        let (runtime,_)=agents.register("claude",1,2,"D:/probe".into());
+        agents.apply(&runtime,"native",vec![
+            Event::Ready{session_id:"native".into(),model:"probe".into(),models:vec![],capabilities:Capabilities{send:true,..Default::default()}},
+            Event::State{state:"idle".into(),turn_id:String::new()},
+        ]).unwrap();
+        agents.share(&runtime,2,true,true).unwrap();
+        let host=Arc::new(AgentHost{agents:agents.clone(),input:Mutex::new(vec![])});
+        let hub=RemoteHub::new(1,vec![],host.clone());
+        hub.inner.lock().unwrap().clients.insert("cookie".into(),Client{id:"phone".into(),expires:Instant::now()+CLIENT_LIFETIME});
+        let mut headers=HeaderMap::new();
+        headers.insert(header::COOKIE,HeaderValue::from_static("sterm_remote=cookie"));
+        let session=SharedSession{id:1,generation:2,title:"agent".into(),cols:100,rows:30,allow_control:true,
+            controller:None,epoch:None,seq:0,cwd:None,agent:Some("claude".into()),agent_status:Some("idle".into()),link_key:None};
+        hub.share(session.clone()).unwrap();
+        assert_eq!(hub.status().sessions.len(),1);
+        assert_eq!(agents.list(true)["sessions"].as_array().unwrap().len(),1);
+        hub.claim("phone",1,2).unwrap();
+        let epoch=hub.status().sessions[0].epoch.clone().unwrap();
+        hub.remote_write("phone",1,2,&epoch,"native input").unwrap();
+        assert!(!hub.local_write_allowed(1,2));
+        let command=Command{id:"structured".into(),runtime_id:runtime.clone(),generation:2,session_id:"native".into(),
+            settings_revision:None,action:Action::SendText{text:"structured input".into()}};
+        hub.submit_agent(&headers,command.clone()).unwrap();
+        assert_eq!(agents.commands(&runtime).len(),1);
+        assert_eq!(*host.input.lock().unwrap(),vec!["native input"]);
+        let mut readonly=session.clone();readonly.allow_control=false;
+        hub.share(readonly).unwrap();
         assert!(hub.local_write_allowed(1,2));
+        assert!(hub.claim("phone",1,2).is_err());
+        assert!(hub.remote_write("phone",1,2,&epoch,"stale native input").is_err());
+        agents.share(&runtime,2,true,false).unwrap();
+        let mut denied=command.clone();denied.id="readonly".into();
+        assert!(hub.submit_agent(&headers,denied).is_err());
+        agents.share(&runtime,2,true,true).unwrap();hub.share(session).unwrap();
+        agents.finish(&runtime);
+        assert_eq!(hub.status().sessions.len(),1);
+        hub.claim("phone",1,2).unwrap();
+        let epoch=hub.status().sessions[0].epoch.clone().unwrap();
+        hub.remote_write("phone",1,2,&epoch,"shell input after exit").unwrap();
+        assert_eq!(host.input.lock().unwrap().last().unwrap(),"shell input after exit");
     }
     #[test]
     fn downgrading_or_unsharing_immediately_invalidates_control() {

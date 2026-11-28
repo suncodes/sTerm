@@ -66,7 +66,7 @@ npm run tauri build
 
 远程入口为「设置 → 远程访问」，支持统一默认权限与会话例外；手机通过右侧列表切换会话。已有安装版正在使用时，可运行 `npm run dev:remote` 启动隔离配置的开发版。扫码及公网配置见 [远程访问说明](docs/remote-access.md)。
 
-Agent 入口位于顶栏「Agent」，支持新建或按历史 ID 恢复后显式分享；使用与已验证版本见 [Agent 模式说明](docs/agent-mode.md)。
+在已启用自动接入的新终端中照常运行 claude / codex，即可通过网页右上角「终端 / Agent」查看同一会话的两种视图；分享与输入沿用远程访问默认规则和单会话例外。使用与已验证版本见 [Agent 模式说明](docs/agent-mode.md)。
 
 飞书入口为「设置 → 通知」，配置步骤见 [飞书完成通知与续问](docs/feishu-notifications.md)。
 

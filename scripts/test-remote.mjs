@@ -243,14 +243,44 @@ test("changing held keys, failed sends and control cancellation leave no queued 
 });
 
 const controllerBundle = await build({
-  entryPoints: ["src/remote/controller.ts"], bundle: true, write: false, format: "esm", platform: "node",
+  stdin:{contents:'export * from "./src/remote/controller"; export { TerminalSession } from "./src/terminal/session";',resolveDir:process.cwd()}, bundle: true, write: false, format: "esm", platform: "node",
   plugins: [{ name: "tauri-fixture", setup(plugin) {
-    plugin.onResolve({ filter: /^@tauri-apps\/api\// }, args => ({ path: args.path, namespace: "fixture" }));
-    plugin.onLoad({ filter: /.*/, namespace: "fixture" }, () => ({ contents: 'export const invoke = (...args) => globalThis.remoteFixture.invoke(...args); export const listen = async () => () => {};', loader: "js" }));
+    plugin.onResolve({ filter: /^@tauri-apps\// }, args => ({ path: args.path, namespace: "fixture" }));
+    plugin.onResolve({filter:/^@xterm\//},args=>({path:args.path,namespace:"xterm-fixture"}));
+    plugin.onLoad({filter:/.*/,namespace:"xterm-fixture"},()=>({contents:"export class Terminal{} export class FitAddon{} export class SearchAddon{} export class SerializeAddon{} export class WebLinksAddon{}",loader:"js"}));
+    plugin.onLoad({ filter: /.*/, namespace: "fixture" }, () => ({ contents: 'export const invoke = (...args) => globalThis.remoteFixture.invoke(...args); export const listen = async () => () => {}; export const readText=async()=>""; export const writeText=async()=>{};', loader: "js" }));
   } }],
 });
-const { RemoteController } = await import("data:text/javascript;base64," + Buffer.from(controllerBundle.outputFiles[0].contents).toString("base64"));
+const { RemoteController,TerminalSession } = await import("data:text/javascript;base64," + Buffer.from(controllerBundle.outputFiles[0].contents).toString("base64"));
 
+test("an attached Agent terminal can share, accept remote control and release it without losing its binding",async()=>{
+  const calls=[],visibility=[];
+  globalThis.remoteFixture={invoke:async(...args)=>{calls.push(args);}};
+  const session=Object.assign(Object.create(TerminalSession.prototype),{
+    id:7,generation:2,title:"Codex terminal",cwd:"D:/workspace",alive:true,disposed:false,starting:false,
+    agentState:{agent:"codex",status:"idle"},term:{cols:100,rows:30,textarea:{readOnly:false}},
+    remoteShared:false,remoteAllowControl:false,remoteSeq:0,remoteControlled:false,
+    permissionQueue:Promise.resolve(),remoteQueue:Promise.resolve(),
+    remoteBanner:{classList:{toggle:(name,value)=>visibility.push([name,value])}},cancelResize:()=>{},refit:()=>{},
+  });
+  session.setAgentRuntime("runtime");
+  await session.setRemoteShared(true,true);
+  assert.ok(session.isAgentMode&&session.isRemoteShared&&session.isRemoteControllable);
+  assert.equal(calls[0][0],"remote_share");assert.equal(calls[0][1].session.agent,"codex");
+  session.applyRemoteControl({...session.remoteInfo(),generation:1,controller:"stale"});
+  assert.equal(session.term.textarea.readOnly,false);
+  session.applyRemoteControl({...session.remoteInfo(),controller:"phone"});
+  assert.equal(session.term.textarea.readOnly,true);
+  assert.ok(session.isAgentMode&&session.isRemoteShared);
+  assert.deepEqual(visibility.at(-1),["hidden",false]);
+  session.applyRemoteControl({...session.remoteInfo(),controller:null});
+  assert.equal(session.term.textarea.readOnly,false);
+  assert.deepEqual(visibility.at(-1),["hidden",true]);
+  session.setAgentRuntime(null);
+  assert.ok(!session.isAgentMode&&session.isRemoteShared);
+  await session.setRemoteShared(false,false);
+  assert.ok(!session.isRemoteShared&&!session.isRemoteControllable);
+});
 test("controller applies inherited permissions to new and restarted sessions and preserves exceptions", async () => {
   const storage = new Map();
   globalThis.localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) };
@@ -315,7 +345,7 @@ test("controller applies inherited permissions to new and restarted sessions and
   assert.equal(controller.status, null);
 });
 
-test("Agent shares inherit existing defaults without raw terminal control and preserve explicit exceptions", async () => {
+test("Agent and terminal share the same tabs and permission rules without excluding either view", async () => {
   const storage=new Map(),calls=[];
   globalThis.localStorage={getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value)};
   globalThis.remoteFixture={invoke:async(command,args)=>{calls.push([command,args]);return null;}};
@@ -325,24 +355,35 @@ test("Agent shares inherit existing defaults without raw terminal control and pr
     setAgentRuntime(value){this.isAgentMode=Boolean(value);},
     resumeRemoteSharing(){this.isRemotePaused=false;},
     remoteDisabled(){this.isRemoteShared=false;},
-    async setRemoteShared(value){this.isRemoteShared=value;},
+    async setRemoteShared(value,input){this.isRemoteShared=value;this.isRemoteControllable=value&&input;},
   });
   const one=session(1),two=session(2),tabs={sessions:[one,two],byId:id=>tabs.sessions.find(row=>row.id===id)};
   const controller=new RemoteController(tabs);
   controller.status={enabled:true,port:18765,origins:[],sessions:[],clients:0};
   await controller.updateAgents([{runtimeId:"a",tabId:1,generation:1,state:"idle",shared:false,allowControl:false},{runtimeId:"b",tabId:2,generation:1,state:"idle",shared:false,allowControl:false}]);
   assert.ok(one.isAgentMode&&two.isAgentMode);
-  assert.ok(!one.isRemoteShared&&!two.isRemoteShared);
+  assert.ok(one.isRemoteShared&&two.isRemoteShared);
+  assert.equal(controller.sharedCount,2,"one shared tab must not be counted twice across views");
   assert.ok(controller.agents.every(row=>row.shared&&!row.allowControl));
   await controller.setPolicy(two,"readonly");
   await controller.setDefaults({share:true,input:true});
   assert.equal(controller.agents[0].allowControl,true);
   assert.equal(controller.agents[1].allowControl,false);
+  assert.ok(one.isRemoteShared&&one.isRemoteControllable);
+  assert.ok(two.isRemoteShared&&!two.isRemoteControllable);
   await controller.setDefaults({share:false,input:false});
   assert.equal(controller.agents[0].shared,false);
   assert.equal(controller.agents[1].shared,true);
+  assert.ok(!one.isRemoteShared&&two.isRemoteShared);
+  assert.equal(controller.sharedCount,1);
   await controller.setPolicy(one,"control");
   assert.equal(controller.agents[0].allowControl,true);
+  assert.ok(one.isRemoteShared&&one.isRemoteControllable);
+  assert.equal(controller.sharedCount,2);
+  await controller.updateAgents([{...controller.agents[0],state:"exited"},{...controller.agents[1]}]);
+  assert.equal(one.isAgentMode,false,"an ended Agent must not keep the shell in Agent mode");
+  assert.ok(one.isRemoteShared&&one.isRemoteControllable&&two.isAgentMode);
+  assert.equal(controller.sharedCount,2);
   one.generation++;
   await controller.updateAgents([{runtimeId:"old",tabId:1,generation:1,state:"idle",shared:false,allowControl:false}]);
   assert.equal(one.isAgentMode,false);

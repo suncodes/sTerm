@@ -506,7 +506,6 @@ export class TerminalSession {
   }
 
   private async updateRemoteSharing(enabled: boolean, allowControl: boolean, generation: number): Promise<void> {
-    if (enabled && this.isAgentMode) throw new Error("此终端使用 Agent 分享，请在设置 → 远程访问中调整权限");
     if (enabled && !this.alive) return;
     const wasShared = this.remoteShared;
     const previousAllow = this.remoteAllowControl;
@@ -539,7 +538,7 @@ export class TerminalSession {
   }
 
   applyRemoteControl(session: SharedSession): void {
-    if (session.generation !== this.generation || this.isAgentMode && session.controller) return;
+    if (session.generation !== this.generation) return;
     this.remoteControlled = Boolean(session.controller);
     this.remoteBanner.classList.toggle("hidden", !this.remoteControlled);
     if (this.term.textarea) this.term.textarea.readOnly = this.remoteControlled;

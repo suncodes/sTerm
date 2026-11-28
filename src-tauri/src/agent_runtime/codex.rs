@@ -662,6 +662,10 @@ mod tests {
         let item=json!({"type":"agentMessage","id":"async-item","delivery":"async","text":"","questions":[{"title":"Pick?","options":["A","B"]}]});
         client.notification(json!({"method":"item/started","params":{"threadId":"root","turnId":"turn","item":item}}));
         let s=client.hub.snapshot(&runtime,false).unwrap();assert_eq!(s.interactions.len(),1);assert!(!s.interactions[0].blocking);
+        client.notification(json!({"method":"turn/completed","params":{"threadId":"root","turn":{"id":"turn","status":"completed"}}}));
+        assert_eq!(client.hub.snapshot(&runtime,false).unwrap().interactions.len(),1);
+        client.notification(json!({"method":"turn/started","params":{"threadId":"root","turn":{"id":"followup","status":"inProgress"}}}));
+        assert_eq!(client.hub.snapshot(&runtime,false).unwrap().interactions.len(),1);
         client.hub.disconnect(&runtime);
         assert_eq!(client.hub.snapshot(&runtime,false).unwrap().interactions.len(),1);
         client.hub.apply(&runtime,"root",vec![Event::State{state:"running".into(),turn_id:"turn".into()}]).unwrap();

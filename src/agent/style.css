@@ -1,3 +1,4 @@
+@import "../remote/header.css";
 /* Agent 网页沿用 sTerm 灰阶与控件语言，消息排版独立于终端尺寸。 */
 :root{color-scheme:dark;--bg:#2a2a2e;--bg-bar:#363639;--bg-hover:#43434a;--border:#414147;--border-strong:#50505a;--fg:#e0e0e4;--fg-2:#c4c4c8;--fg-dim:#aaaab5;--accent:#a9c8f0;--radius:4px;--content-width:792px;--content-gutter:24px;--content-column:min(var(--content-width),calc(100vw - var(--content-gutter)*2));--content-inset:max(var(--content-gutter),calc((100% - var(--content-width))/2))}
 *{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden}
@@ -13,15 +14,6 @@ body{font:12px "Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;background:v
 .status-dot[data-state=approval]{background:#e5af61}.status-dot[data-state=error]{background:#e38a8a}.status-dot[data-state=ended],.status-dot[data-state=offline]{background:#93939f}
 @keyframes pulse{50%{opacity:.4}}
 .web-app{height:100%;display:flex;flex-direction:column;position:relative;min-height:0;background:var(--bg);padding-top:env(safe-area-inset-top)}
-.client-header{min-height:61px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 6px 8px 14px}
-.client-brand{display:flex;align-items:center;gap:9px;min-width:0}.brand-icon{width:22px;height:22px;color:#c3c3ce}
-.client-brand strong{display:block;font-size:14px;font-weight:600;letter-spacing:.1px}.client-brand small{display:block;font-size:10px;color:var(--fg-dim);margin-top:2px}
-.header-actions{display:flex;align-items:center;gap:8px}
-.mode-switch{display:flex;border:1px solid #505058;background:#252529;border-radius:4px;padding:2px;gap:2px}
-.mode-switch button{border:0;background:transparent;color:#aaaab5;font-size:11px;min-height:28px;padding:0 11px}
-.mode-switch button[aria-pressed=true]{background:#45454d;color:#ededf1}
-.connection{font-size:10px;white-space:nowrap;display:flex;align-items:center;gap:5px;color:#a9bbaa}.connection::before{content:"";height:5px;width:5px;border-radius:50%;background:currentColor}
-.connection[data-offline=true]{color:#d7b47b}
 .session-bar{min-height:48px;display:flex;align-items:stretch;flex-shrink:0;background:var(--bg-bar);border-bottom:1px solid var(--border);padding-left:6px}
 .current-session{display:flex;align-items:center;flex:1;min-width:0;gap:8px;padding:0 8px}
 .current-session strong{font-size:12px;font-weight:500;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;flex:1}
@@ -108,14 +100,11 @@ body{font:12px "Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;background:v
 /* 共享页面保留原型布局，所有状态来自实际 Agent。 */
 #agent-app{height:var(--viewport-height,100dvh);min-height:0}
 #agent-layout{display:flex;flex:1;min-height:0;flex-direction:column}
-.mode-switch a{border:0;background:transparent;color:#aaaab5;font-size:11px;min-height:28px;padding:5px 11px;text-decoration:none;display:flex;align-items:center;border-radius:3px}
-.mode-switch a[aria-current=page]{background:#45454d;color:#ededf1}
 .agent-session{height:44px;min-width:158px;max-width:260px;flex-shrink:0;display:flex;align-items:center;gap:8px;background:transparent;border:0;padding:0 12px;color:#b8b8c2;font-size:12px;position:relative;border-radius:4px 4px 0 0}
 .agent-session strong{font-weight:400;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .agent-session[aria-selected=true]{background:#43434a;color:#ececf1}
 .agent-session[aria-selected=true]::after{content:"";position:absolute;left:10px;right:10px;bottom:0;height:2px;background:#8aaddc}
 #agent-path{font:10px Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-#agent-connection[data-state=offline]{color:#d7b47b}
 .status-dot[data-state=waiting]{background:#e5af61}.status-dot[data-state=connecting]{background:#d4ac5b}.status-dot[data-state=exited]{background:#93939f}
 .agent-item{margin-bottom:24px;overflow-wrap:anywhere}
 .agent-item-user{margin-left:14%;padding:12px 15px;background:#34343b;border:1px solid #494951;border-radius:4px}
@@ -180,10 +169,9 @@ body{font:12px "Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;background:v
 .current-session{display:none}.session-tabs{display:flex}
 .sheet-layer:not([data-sheet=sessions]){align-items:center}
 .sheet-layer:not([data-sheet=sessions]) .sheet{max-width:450px;max-height:85%;border:1px solid #55555f;border-radius:6px;padding-bottom:20px}
-.messages{padding-top:28px}.client-header{padding-left:19px}
+.messages{padding-top:28px}
 }
 @media(max-width:520px){
-.client-header{padding:7px 3px 7px 12px;gap:3px}.client-brand{gap:7px}.client-brand small{font-size:9px}.header-actions{gap:5px}.mode-switch a{padding:0 8px;min-height:28px;font-size:10px}.connection{font-size:9px}.header-actions>.touch-button{width:34px}
 .session-count{display:none}.session-list-button{padding:0 12px}.settings-current-state{display:none}.setting-button{font-size:11px;gap:5px;padding:0 7px}.setting-divider{margin:0 3px}.agent-settings{padding:0 7px}.setting-caption{font-size:10px}.session-meta{padding:0 13px;gap:8px}
 :root{--content-gutter:15px}.messages{padding:19px 0 20px}.agent-item{margin-bottom:21px}.agent-item-user{margin-left:9%;padding:11px 13px}.process-row>summary{min-height:44px}
 .activity-bar{padding:0 var(--content-inset);min-height:39px}.stop-button{height:38px}.composer{padding:10px var(--content-inset) max(10px,env(safe-area-inset-bottom))}
@@ -193,7 +181,7 @@ body{font:12px "Segoe UI","Microsoft YaHei UI",system-ui,sans-serif;background:v
 .approval-actions button{height:40px;min-width:74px;font-size:11px}.approval-actions .details-link{min-width:0}.approval-actions{gap:7px;margin-top:9px}
 .conversation{scrollbar-width:none}.queue-bar{padding:0 var(--content-inset)}.connection-banner,.operation-error{padding:8px 12px;font-size:10px}.sheet{padding:0 14px 16px}.toast{bottom:140px}
 }
-@media(max-width:360px){.header-actions{gap:3px}.mode-switch a{padding:0 7px}.setting-button{font-size:10px}}
+@media(max-width:360px){.setting-button{font-size:10px}}
 @media(max-height:640px){.client-header{min-height:50px}.session-bar{min-height:43px}.agent-settings{min-height:41px}.session-meta{height:28px}.messages{padding-top:14px}#agent-draft{min-height:46px}.approval-dock{max-height:45%}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 
@@ -204,7 +192,7 @@ p,h1,h2,h3,pre{margin:0}.sheet-description{margin:0}.agent-item-user .agent-cont
 #interaction-form fieldset{min-width:0;border:0;padding:0;margin:0}
 #interaction-form legend{padding:0;margin-bottom:6px;line-height:1.5;font-size:13px;font-weight:500;max-width:100%;overflow-wrap:anywhere}
 .question-option{display:flex;gap:9px;align-items:flex-start;min-height:44px;padding:7px 5px;border-bottom:1px solid #424249;border-radius:3px;cursor:pointer}.question-option:not(:has(input:disabled)):hover,.question-option:has(input:checked){background:#38383f}
-.question-option:has(input:disabled){cursor:default}.question-option input{flex-shrink:0;margin:3px 0 0;min-width:18px;min-height:18px;accent-color:#aebcd0}.question-option span{min-width:0}
+.question-option:has(input:disabled){cursor:default}.question-option input{flex-shrink:0;margin:3px 0 0;min-width:18px;min-height:18px;accent-color:#aebcd0}.question-option span{min-width:0;overflow-wrap:anywhere}
 .question-option strong{display:block;font-size:13px;font-weight:500;line-height:1.45}.question-option small,.form-field small{display:block;margin-top:2px;line-height:1.45;font-size:12px;color:#b9b9c5}
 .question-notes,.form-field{display:block;font-size:12px;margin-top:8px;line-height:1.5}
 .question-notes textarea,.form-field input,.form-field select,.queued-item textarea{display:block;width:100%;border:1px solid #646470;background:#29292f;border-radius:4px;padding:9px;color:inherit;font:inherit;min-height:44px;margin-top:4px}
@@ -252,7 +240,7 @@ p,h1,h2,h3,pre{margin:0}.sheet-description{margin:0}.agent-item-user .agent-cont
 
 /* 交互共用可滚动正文与固定操作区，表单保留所有题目的原生字段。 */
 #interaction-card>.interaction-card-body{display:flex;flex:1 1 auto;min-height:0;flex-direction:column;overflow:hidden;padding:0}
-.interaction-scroll{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;padding:8px 12px;scrollbar-width:thin}
+.interaction-scroll{container-type:inline-size;flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;padding:8px 12px;scrollbar-width:thin}
 .interaction-footer{flex-shrink:0;max-height:min(164px,calc(var(--viewport-height,100dvh)*.32));overflow:auto;overscroll-behavior:contain;border-top:1px solid #484850;padding:8px 10px;background:#303036}
 .interaction-footer .interaction-decisions{display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));gap:8px;margin:0}
 .interaction-footer button{white-space:normal;overflow-wrap:anywhere;padding:7px}
@@ -301,3 +289,16 @@ p,h1,h2,h3,pre{margin:0}.sheet-description{margin:0}.agent-item-user .agent-cont
 .web-app[data-compact-viewport=true]:has(.interaction-card:not([hidden])) .client-header{min-height:44px;padding-top:0;padding-bottom:0}
 .web-app[data-compact-viewport=true]:has(.interaction-card:not([hidden])) .client-brand small,
 .web-app[data-compact-viewport=true]:has(.interaction-card:not([hidden])) .session-meta{display:none}
+
+/* 宽卡片利用横向空间；选项预览保持单列，窄卡片沿用触控布局。 */
+@container(min-width:640px){
+.question-options[data-compact-options]{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:16px}
+.question-options[data-compact-options] .question-option strong,
+.question-options[data-compact-options] .question-option small{display:inline}
+.question-options[data-compact-options] .question-option small{margin:0 0 0 6px}
+}
+@media(hover:hover) and (pointer:fine){
+@container(min-width:640px){
+.question-options[data-compact-options] .question-option{min-height:40px;padding-top:5px;padding-bottom:5px}
+}
+}

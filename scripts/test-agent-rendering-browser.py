@@ -197,6 +197,45 @@ try:
  browser.until('document.querySelector("#interaction-card").hidden')
  assert commands[-1]["response"]=={"answers":{"q":["B"]}}
  print("PASS Chrome ordinary card without focus theft, Other constraint, draft and native acknowledgement",flush=True)
+ browser.call("Emulation.setTouchEmulationEnabled",{"enabled":False})
+ for option_count in [4,6,8]:
+  set_interaction(interaction("desktop-"+str(option_count),questions=[{"id":"target","title":"选择执行方案","other":True,"options":[{"label":"方案 "+str(i+1),"description":"保留当前工作区的配置，并继续完成任务。"} for i in range(option_count)]}]))
+  browser.until(f'document.querySelector("#interaction-card").dataset.interactionId==="desktop-{option_count}"')
+  for width,height in [(1920,1080),(1536,864),(1440,900),(1366,768),(1024,768)]:
+   browser.call("Emulation.setDeviceMetricsOverride",{"width":width,"height":height,"deviceScaleFactor":1,"mobile":False})
+   browser.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+   geometry=browser.evaluate('(()=>{const body=document.querySelector(".interaction-scroll"),card=document.querySelector("#interaction-card").getBoundingClientRect(),options=[...document.querySelectorAll(".question-option")].map(n=>{const r=n.getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,height:r.height}}),footer=document.querySelector(".interaction-footer").getBoundingClientRect();return {scroll:body.scrollHeight,client:body.clientHeight,wide:body.scrollWidth>body.clientWidth,options,cardBottom:card.bottom,footerBottom:footer.bottom,overflow:document.documentElement.scrollWidth}})()')
+   assert geometry["scroll"]<=geometry["client"]+1 and not geometry["wide"],(option_count,width,height,geometry)
+   assert abs(geometry["options"][0]["top"]-geometry["options"][1]["top"])<1 and geometry["options"][1]["left"]>geometry["options"][0]["left"],geometry
+   assert all(o["height"]>=40 and o["bottom"]<=geometry["footerBottom"] for o in geometry["options"]),geometry
+   assert geometry["footerBottom"]<=geometry["cardBottom"] and geometry["cardBottom"]<=height and geometry["overflow"]<=width,geometry
+   if option_count==6 and width==1366:shot("desktop-adapted-questions.png")
+ # 窄窗口按卡片宽度恢复单列，答案及焦点在重排时仍属于同一个原生选项。
+ browser.evaluate('document.querySelectorAll("[name=q0]")[3].click();document.querySelectorAll("[name=q0]")[3].focus()')
+ for width,height in [(660,900),(390,844)]:
+  browser.call("Emulation.setDeviceMetricsOverride",{"width":width,"height":height,"deviceScaleFactor":1,"mobile":width<520})
+  browser.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+  assert browser.evaluate('(()=>{const options=[...document.querySelectorAll(".question-option")].map(n=>n.getBoundingClientRect());return options[1].top>=options[0].bottom && Math.abs(options[1].left-options[0].left)<1 && options.every(r=>r.height>=44) && document.querySelectorAll("[name=q0]")[3].checked && document.activeElement===document.querySelectorAll("[name=q0]")[3] && document.documentElement.scrollWidth<=innerWidth})()')
+ browser.call("Emulation.setDeviceMetricsOverride",{"width":1366,"height":768,"deviceScaleFactor":1,"mobile":False})
+ browser.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+ set_interaction(interaction("desktop-long-labels",questions=[{"id":"long","title":"Long target names","options":[{"label":"Target_"+chr(65+i)*90,"description":"description_"*25} for i in range(4)]}]))
+ browser.until('document.querySelector("#interaction-card").dataset.interactionId==="desktop-long-labels"')
+ browser.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+ assert browser.evaluate('document.querySelector(".interaction-scroll").scrollWidth<=document.querySelector(".interaction-scroll").clientWidth && document.documentElement.scrollWidth<=innerWidth')
+ # 复杂长内容仍可滚动阅读，操作区可见；带预览的选项保持单列避免压缩代码。
+ set_interaction(interaction("desktop-preview",questions=[{"id":"preview","title":"Review changes","options":[{"label":"方案 "+str(i+1),"description":"说明"*80,"preview":"line one\nline two\nline three"} for i in range(4)]}]))
+ browser.until('document.querySelector("#interaction-card").dataset.interactionId==="desktop-preview"')
+ browser.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+ assert browser.evaluate('(()=>{const labels=[...document.querySelectorAll(".question-option")].map(n=>n.getBoundingClientRect()),body=document.querySelector(".interaction-scroll"),footer=document.querySelector(".interaction-footer").getBoundingClientRect();return labels[1].top>=labels[0].bottom && body.scrollHeight>body.clientHeight && body.scrollWidth<=body.clientWidth && footer.bottom<=innerHeight && document.querySelector(".interaction-footer button[type=submit]").getBoundingClientRect().top>=footer.top})()')
+ browser.evaluate('document.querySelector(".interaction-scroll").scrollTop=9999')
+ assert browser.evaluate('(()=>{const b=document.querySelector(".interaction-footer button[type=submit]"),r=b.getBoundingClientRect();return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===b})()')
+ browser.evaluate('document.querySelector("[data-expand-interaction]").click()')
+ browser.until('!document.querySelector("#sheet-layer").hidden')
+ assert browser.evaluate('document.querySelectorAll("#sheet .detail-code").length===4')
+ browser.evaluate('document.querySelector("[data-close-sheet]").click()')
+ row["interactions"]=[];row["seq"]+=1
+ browser.until('document.querySelector("#interaction-card").hidden')
+ print("PASS Chrome desktop question cards fit 4/6/8 choices without inner scrolling, narrow cards keep touch layout, previews and long content remain readable",flush=True)
  browser.call("Emulation.setDeviceMetricsOverride",{"width":390,"height":844,"deviceScaleFactor":1,"mobile":True})
  browser.evaluate('(()=>{const f=document.querySelector("#agent-draft");f.value="Preserved conversation draft";f.dispatchEvent(new Event("input",{bubbles:true}));f.blur()})()')
  set_interaction(interaction("paged",cancellable=True,questions=[
@@ -280,15 +319,27 @@ try:
  assert browser.evaluate('!document.querySelector("#agent-composer").hidden && document.querySelector("#agent-draft").value==="Preserved conversation draft" && !JSON.stringify(sessionStorage).includes("fixture-only-secret")')
  print("PASS Chrome compact question pages, fixed navigation, Other, stable identity drafts, secret, readonly, full validation, viewport budget and one complete native reply",flush=True)
  set_interaction(interaction("async","asyncQuestion",False,questions=[{"id":"q","title":"Optional answer","options":[]}]))
- browser.until('document.querySelector("#interaction-card").textContent.includes("async")')
+ browser.until('document.querySelector("#interaction-card").dataset.interactionId==="async" && Boolean(document.querySelector("#interaction-form"))')
+ assert browser.evaluate('document.querySelector("#sheet-layer").hidden && !document.querySelector("#agent-composer").hidden && document.querySelector("#interaction-card").textContent.includes("可随时回答") && !document.querySelector("#interaction-card").contains(document.activeElement)')
+ row.update(state="running",turnId="async-followup")
+ row["turns"].append({"id":"async-followup","agentId":"","state":"inProgress","startedAtMs":int(time.time()*1000)})
+ row["seq"]+=1
+ browser.until('document.querySelector("#agent-state").textContent==="运行中"')
+ assert browser.evaluate('Boolean(document.querySelector("#interaction-form"))')
+ row["state"]="idle";row["turnId"]="";row["turns"][-1]["state"]="completed";row["seq"]+=1
+ browser.until('document.querySelector("#agent-state").textContent==="空闲"')
+ assert browser.evaluate('Boolean(document.querySelector("#interaction-form"))')
+ browser.evaluate('document.querySelector("[data-collapse-interaction]").click()')
  assert not browser.evaluate('Boolean(document.querySelector("#interaction-form"))')
+ row["interactions"][0]["detail"]="Continued native work";row["seq"]+=1
+ browser.until('document.querySelector("#interaction-card").dataset.interactionId==="async"')
  browser.evaluate('document.querySelector("#interaction-card [data-interaction-open]").click()')
  browser.until('Boolean(document.querySelector("[name=notes0]"))')
  browser.evaluate('(()=>{const f=document.querySelector("[name=notes0]");f.value="draft preserved";f.focus();f.setSelectionRange(3,7);f.dispatchEvent(new Event("input",{bubbles:true}))})()')
  row["interactions"][0]["detail"]="Updated native prompt";row["seq"]+=1
  browser.until('document.querySelector("#interaction-card").textContent.includes("Updated native prompt")')
  assert browser.evaluate('document.activeElement.name==="notes0" && document.activeElement.value==="draft preserved" && document.activeElement.selectionStart===3 && document.activeElement.selectionEnd===7')
- print("PASS Chrome nonblocking card expansion and focus/selection preservation across updates",flush=True)
+ print("PASS Chrome async questions expand by default, survive continued work, respect manual collapse and preserve focus/drafts",flush=True)
  set_interaction(interaction("approval","approval",decisions=[{"label":"Approve once","value":"accept"}],context={"command":"echo <safe>","cwd":"D:/isolated","reason":"Native readable prompt"}))
  browser.until('Boolean(document.querySelector(".tool-command")) && document.querySelector("#interaction-card").textContent.includes("echo <safe>")')
  assert browser.evaluate('document.querySelector("#sheet-layer").hidden && !document.querySelector(".native-detail").open')

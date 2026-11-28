@@ -40,12 +40,17 @@ export class RemoteController {
   }
 
   get sessions(): readonly TerminalSession[] { return this.tabs.sessions; }
+  get sharedCount():number{
+    const shared=new Set(this.sessions.filter(session=>session.isRemoteShared).map(session=>session.id+":"+session.remoteInfo().generation));
+    for(const row of this.agents)if(row.shared)shared.add(row.tabId+":"+row.generation);
+    return shared.size;
+  }
   async updateAgents(rows:AgentSession[]):Promise<void>{
     const changed=JSON.stringify(this.agents)!==JSON.stringify(rows);
     this.agents=rows;
     this.keepAlive.setEnabled(Boolean(this.status)||rows.some(row=>row.state!=="exited"));
     for(const session of this.sessions){
-      const row=rows.find(row=>row.tabId===session.id&&row.generation===session.remoteInfo().generation);
+      const row=rows.find(row=>row.tabId===session.id&&row.generation===session.remoteInfo().generation&&row.state!=="exited");
       session.setAgentRuntime(row?.runtimeId??null);
     }
     for(const id of this.agentSynced.keys())if(!rows.some(row=>row.runtimeId===id))this.agentSynced.delete(id);
@@ -120,13 +125,12 @@ export class RemoteController {
         const policy = this.policy(session);
         const permission = resolveRemotePermission(policy, this.defaults);
         const info = session.remoteInfo();
-        const enabled = !session.isAgentMode && permission.share && session.isRunning && !session.isRemotePaused;
+        const enabled = permission.share && session.isRunning && !session.isRemotePaused;
         const key = JSON.stringify([info.generation, info.title, info.cwd, info.agent, info.agentStatus, enabled, permission.input]);
         if (this.synced.get(session) === key && session.isRemoteShared === enabled
           && (!enabled || session.isRemoteControllable === permission.input)) continue;
         if (enabled || session.isRemoteShared) {
-          try { await session.setRemoteShared(enabled, permission.input); }
-          catch(error){if(!session.isAgentMode)throw error;}
+          await session.setRemoteShared(enabled, permission.input);
         }
         this.synced.set(session, key);
       }
