@@ -201,13 +201,13 @@ p,h1,h2,h3,pre{margin:0}.sheet-description{margin:0}.agent-item-user .agent-cont
 .interaction-prompt{display:flex;align-items:center;justify-content:space-between;gap:14px;width:100%;min-height:52px;border:1px solid #60606b;border-radius:5px;background:#38383e;text-align:left;padding:9px 12px;margin:4px 0;font-size:12px}
 .interaction-prompt strong,.interaction-prompt small{display:block}.interaction-prompt small{margin-top:5px;color:#b9b9c4;font-size:11px}
 .interaction-decisions{display:flex;flex-wrap:wrap;gap:9px;margin:18px 0}.interaction-decisions button,.confirm-actions button{min-height:44px}
-#interaction-form fieldset{border:1px solid #55555f;border-radius:5px;padding:12px;margin:17px 0}
-#interaction-form legend{padding:0 6px;line-height:1.8;font-size:13px;max-width:100%;overflow-wrap:anywhere}
-.question-option{display:flex;gap:12px;align-items:flex-start;min-height:44px;padding:12px 8px;border-bottom:1px solid #48484f;cursor:pointer}
-.question-option input{margin-top:5px;min-width:18px;min-height:18px;accent-color:#aebcd0}.question-option span{min-width:0}
-.question-option strong{font-size:13px;font-weight:500;line-height:1.7}.question-option small,.form-field small{display:block;line-height:1.7;font-size:12px;color:#b9b9c5}
-.question-notes,.form-field{display:block;font-size:12px;margin-top:14px;line-height:1.8}
-.question-notes textarea,.form-field input,.form-field select,.queued-item textarea{display:block;width:100%;border:1px solid #646470;background:#29292f;border-radius:4px;padding:9px;color:inherit;font:inherit;min-height:44px;margin-top:7px}
+#interaction-form fieldset{min-width:0;border:0;padding:0;margin:0}
+#interaction-form legend{padding:0;margin-bottom:6px;line-height:1.5;font-size:13px;font-weight:500;max-width:100%;overflow-wrap:anywhere}
+.question-option{display:flex;gap:9px;align-items:flex-start;min-height:44px;padding:7px 5px;border-bottom:1px solid #424249;border-radius:3px;cursor:pointer}.question-option:not(:has(input:disabled)):hover,.question-option:has(input:checked){background:#38383f}
+.question-option:has(input:disabled){cursor:default}.question-option input{flex-shrink:0;margin:3px 0 0;min-width:18px;min-height:18px;accent-color:#aebcd0}.question-option span{min-width:0}
+.question-option strong{display:block;font-size:13px;font-weight:500;line-height:1.45}.question-option small,.form-field small{display:block;margin-top:2px;line-height:1.45;font-size:12px;color:#b9b9c5}
+.question-notes,.form-field{display:block;font-size:12px;margin-top:8px;line-height:1.5}
+.question-notes textarea,.form-field input,.form-field select,.queued-item textarea{display:block;width:100%;border:1px solid #646470;background:#29292f;border-radius:4px;padding:9px;color:inherit;font:inherit;min-height:44px;margin-top:4px}
 .form-field select[multiple]{min-height:110px}.queued-item{margin:14px 0}.queued-item textarea{font-size:14px;min-height:85px;line-height:1.6}
 #sheet :focus-visible{outline:2px solid #b4c9e5;outline-offset:3px}.external-link{display:block;padding:12px;min-height:44px;color:#c9d9ee;text-decoration:underline;overflow-wrap:anywhere}
 .activity-detail{padding:10px var(--content-inset);border-top:1px solid #57575f;background:#39373a;font-size:12px;line-height:1.8;max-height:20vh;overflow:auto;overflow-wrap:anywhere}
@@ -219,11 +219,11 @@ p,h1,h2,h3,pre{margin:0}.sheet-description{margin:0}.agent-item-user .agent-cont
 .decision-rule{flex-basis:100%;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.7 Consolas,monospace;background:#29292e;border:1px solid #55555f;border-radius:4px;padding:10px}
 .question-notes input[type=password]{display:block;width:100%;min-height:44px;background:#29292f;border:1px solid #646470;border-radius:4px;color:inherit;padding:9px;font:inherit}
 
-.interaction-card{flex:0 1 auto;min-height:0;max-height:44vh;border:1px solid #62626d;border-radius:6px;width:var(--content-column);align-self:center;margin:8px 0;background:#303036;display:flex;flex-direction:column;overflow:hidden}
-.interaction-card-heading{display:flex;flex-shrink:0;align-items:center;justify-content:space-between;gap:12px;padding:6px 10px;border-bottom:1px solid #484850}
-.interaction-card-heading>div:first-child{min-width:0}.interaction-card-heading strong{display:block;font-size:12px;line-height:1.7;overflow-wrap:anywhere}
-.interaction-card-heading small{display:block;font-size:11px;color:#b9b9c5;line-height:1.7}.interaction-card-heading>div:last-child{display:flex;flex-shrink:0}
-.interaction-card-body{min-height:0;overflow:auto;overscroll-behavior:contain;padding:12px 14px;font-size:13px;line-height:1.8;scrollbar-width:thin}
+.interaction-card{flex:0 1 auto;min-height:0;max-height:var(--interaction-max-height,55dvh);border:1px solid #62626d;border-radius:6px;width:var(--content-column);align-self:center;margin:8px 0;background:#303036;display:flex;flex-direction:column;overflow:hidden}
+.interaction-card-heading{display:flex;flex-shrink:0;align-items:center;justify-content:space-between;gap:8px;padding:2px 8px;border-bottom:1px solid #484850}
+.interaction-card-heading>div:first-child{min-width:0;display:flex;align-items:baseline;flex-wrap:wrap;gap:0 8px}.interaction-card-heading strong{display:inline;font-size:12px;line-height:1.7;overflow-wrap:anywhere}
+.interaction-card-heading small{display:inline;font-size:11px;color:#b9b9c5;line-height:1.7}.interaction-card-heading>div:last-child{display:flex;flex-shrink:0}
+.interaction-card-body{min-height:0;overflow:auto;overscroll-behavior:contain;padding:8px 12px;font-size:13px;line-height:1.5;scrollbar-width:thin}
 .interaction-card .touch-button{min-width:44px;min-height:44px;font-size:12px}.interaction-card :focus-visible{outline:2px solid #b4c9e5;outline-offset:2px}
 .interaction-error{flex-shrink:0;padding:0 14px;color:#edbec6;font-size:12px;line-height:1.7;white-space:pre-wrap}.interaction-error:not(:empty){padding-top:7px;padding-bottom:7px;border-top:1px solid #51454a}
 #interaction-dock{display:flex;flex-shrink:0;gap:6px;max-height:62px;overflow:auto;width:var(--content-column);align-self:center;padding:5px 0;border:0;background:#2b2b30}
@@ -239,9 +239,8 @@ p,h1,h2,h3,pre{margin:0}.sheet-description{margin:0}.agent-item-user .agent-cont
 .agent-image{display:block;max-width:100%;max-height:420px;object-fit:contain;border:1px solid #4e4e58;border-radius:4px}.resource-placeholder{color:#b9b9c5;font-size:12px}.tool-progress{margin:9px 0;font-size:12px;color:#c8c8d4}
 .native-notice{display:flex;flex-shrink:0;align-items:center;gap:8px;padding:4px var(--content-inset);background:#303036;border-top:1px solid #47474f;font-size:11px;color:#c7c7d1;min-height:36px}.native-notice>span{flex:1;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.native-notice button{border:0;background:transparent;min-height:32px;color:inherit}.notice-entry{padding:14px 0;border-bottom:1px solid #4c4c55}.notice-entry strong{font-size:12px}.notice-entry p{font-size:12px;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere;margin-top:6px}
 .usage-summary{font-size:10px;color:#b2b2bf;margin-left:auto;white-space:nowrap}
-@media(min-width:760px){.interaction-card{max-height:42vh}#sheet-layer[data-sheet=interaction] .sheet,#sheet-layer[data-sheet=task-detail] .sheet{max-width:760px}}
-@media(max-width:520px){.interaction-card{margin:5px 0;max-height:38vh}.interaction-card-body{padding:10px}.interaction-card-heading{padding:5px 7px}.interaction-card-heading strong{font-size:12px}#interaction-dock{padding:4px 0}.usage-summary{font-size:9px}.activity-bar{gap:5px;flex-wrap:wrap;padding-top:3px;padding-bottom:3px}.native-notice{padding:3px var(--content-inset)}}
-@media(max-height:640px){.interaction-card{max-height:35vh}.interaction-card-heading small{display:none}}
+@media(min-width:760px){#sheet-layer[data-sheet=interaction] .sheet,#sheet-layer[data-sheet=task-detail] .sheet{max-width:760px}}
+@media(max-width:520px){.interaction-card{margin:5px 0}.interaction-card-body{padding:8px 10px}.interaction-card-heading{padding:2px 7px}.interaction-card-heading strong{font-size:12px}#interaction-dock{padding:4px 0}.usage-summary{font-size:9px}.activity-bar{gap:5px;flex-wrap:wrap;padding-top:3px;padding-bottom:3px}.native-notice{padding:3px var(--content-inset)}}
 
 .blocked-card{border-color:#866e73;flex-shrink:1}.blocked-card .interaction-card-heading>div{display:block;flex:1;min-width:0}.block-message,.block-explanation{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8}
 .block-message{font-size:12px;color:#e2c5c9}.block-findings{margin-top:10px}.block-findings>summary{min-height:44px;cursor:pointer;color:#d9d9e2;display:flex;align-items:center;text-decoration:underline}
@@ -249,13 +248,13 @@ p,h1,h2,h3,pre{margin:0}.sheet-description{margin:0}.agent-item-user .agent-cont
 .block-steer{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:8px;background:#242428;border:1px solid #55505a;border-radius:4px;padding:10px;font:12px/1.8 Consolas,"Microsoft YaHei UI",monospace}
 .block-acknowledge{display:flex;align-items:flex-start;gap:10px;min-height:44px;margin-top:12px;padding:10px 0;cursor:pointer}.block-acknowledge input{min-width:18px;min-height:18px;margin-top:3px;accent-color:#b4c9e5}
 .block-actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:14px}.block-actions button{min-height:44px;white-space:normal;overflow-wrap:anywhere}
-@media(max-width:520px){.blocked-card .block-actions{flex-direction:column}.blocked-card .block-actions button{width:100%}.blocked-card{max-height:44vh}}
+@media(max-width:520px){.blocked-card .block-actions{flex-direction:column}.blocked-card .block-actions button{width:100%}}
 
-/* 审批正文独立滚动，操作按钮始终可见。 */
-.interaction-card-body:has(>.interaction-scroll){display:flex;flex:1 1 auto;min-height:0;flex-direction:column;overflow:hidden;padding:0}
-.interaction-scroll{min-height:0;overflow:auto;overscroll-behavior:contain;padding:10px 14px;scrollbar-width:thin}
-.interaction-footer{flex-shrink:0;max-height:min(140px,26vh);overflow:auto;overscroll-behavior:contain;border-top:1px solid #484850;padding:8px 10px;background:#303036}
-.interaction-footer .interaction-decisions{display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));gap:7px;margin:0}
+/* 交互共用可滚动正文与固定操作区，表单保留所有题目的原生字段。 */
+#interaction-card>.interaction-card-body{display:flex;flex:1 1 auto;min-height:0;flex-direction:column;overflow:hidden;padding:0}
+.interaction-scroll{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;padding:8px 12px;scrollbar-width:thin}
+.interaction-footer{flex-shrink:0;max-height:min(164px,calc(var(--viewport-height,100dvh)*.32));overflow:auto;overscroll-behavior:contain;border-top:1px solid #484850;padding:8px 10px;background:#303036}
+.interaction-footer .interaction-decisions{display:grid;grid-template-columns:repeat(auto-fit,minmax(88px,1fr));gap:8px;margin:0}
 .interaction-footer button{white-space:normal;overflow-wrap:anywhere;padding:7px}
 .interaction-scroll .native-detail{margin:4px 0}.approval-command{margin:8px 0}
 .interaction-error:empty{display:none}
@@ -266,13 +265,39 @@ p,h1,h2,h3,pre{margin:0}.sheet-description{margin:0}.agent-item-user .agent-cont
 #native-notice .touch-button{min-width:44px;min-height:44px}
 
 .turn-summary{font-size:11px;color:#b2b2bf;line-height:1.8;margin:4px 0 18px;overflow-wrap:anywhere}
-.interaction-card .interaction-scroll>.sheet-description:first-child{display:none}
+.interaction-card .interaction-origin{display:none}
 @media(max-height:520px){
-.web-app:has(.interaction-card:not([hidden])) .agent-settings,.web-app:has(.interaction-card:not([hidden])) .draft-footer{display:none}
-.web-app:has(.interaction-card:not([hidden])) .conversation{min-height:30px}
-.web-app:has(.interaction-card:not([hidden])) .composer{padding-top:6px;padding-bottom:max(6px,env(safe-area-inset-bottom))}
-.web-app:has(.interaction-card:not([hidden])) #agent-draft{height:44px;min-height:44px;max-height:44px;padding:8px 11px}
-.interaction-card{max-height:48vh}
+
 .interaction-scroll{padding:6px 10px}.interaction-scroll .approval-reason{margin:0 0 5px}
 .approval-command{padding:5px;margin:5px 0}.approval-command>span{display:none}
 }
+
+/* 紧凑问答按题切换；隐藏的题目仍保留在同一表单中，最终一次提交。 */
+#interaction-form{display:flex;flex:1 1 auto;flex-direction:column;min-height:0;overflow:hidden;margin:0}
+.question-navigation{display:flex;align-items:center;gap:8px}.question-navigation button{min-height:44px;min-width:76px}
+.question-forward{margin-left:auto}.question-other{margin:0}
+.question-other>summary{display:flex;align-items:center;min-height:44px;cursor:pointer;color:#c2c2cd;font-size:12px;list-style:none}
+.question-other>summary::before{content:"›";margin-right:7px;font-size:16px}.question-other[open]>summary::before{transform:rotate(90deg)}
+.question-other>summary::-webkit-details-marker{display:none}.question-other .question-notes{margin-top:0}
+.question-other .question-notes input,.question-other .question-notes textarea{font-size:13px;margin-top:0}
+.question-notes textarea{resize:vertical;line-height:1.5;max-height:120px}
+.question-option .detail-code,#interaction-form fieldset>.detail-code{margin:6px 0;padding:8px;line-height:1.5}
+#interaction-form .approval-reason{margin:0 0 8px;line-height:1.5}
+#sheet-layer[data-sheet=interaction] .sheet{display:flex;flex-direction:column;overflow:hidden;padding:0 0 env(safe-area-inset-bottom)}
+#sheet-layer[data-sheet=interaction] .sheet-heading{flex-shrink:0;position:static;min-height:48px;margin:0;padding:0 12px}
+#sheet-layer[data-sheet=interaction] [data-interaction-id]{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow:hidden}
+#sheet-layer[data-sheet=interaction] .interaction-origin{padding-bottom:6px}
+.composer-mode{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;font-size:11px;color:#b9b9c5}
+.composer-mode button{min-height:44px;padding:0 8px;border:0;background:transparent;color:#c9d9ee}
+.composer[data-collapsed=true]{padding-top:0;padding-bottom:env(safe-area-inset-bottom)}
+.composer[data-collapsed=true] .composer-mode{margin:0}
+.web-app[data-compact-viewport=true]:has(.interaction-card:not([hidden])) .agent-settings,
+.web-app[data-compact-viewport=true]:has(.interaction-card:not([hidden])) .draft-footer{display:none}
+.web-app[data-compact-viewport=true]:has(.interaction-card:not([hidden])) .conversation{min-height:30px}
+.web-app[data-compact-viewport=true]:has(.interaction-card:not([hidden])) #agent-draft{height:44px;min-height:44px;max-height:44px;padding:8px 11px}
+.web-app[data-interaction-keyboard=true] .client-header,.web-app[data-interaction-keyboard=true] .session-meta,
+.web-app[data-interaction-keyboard=true] .activity-bar,.web-app[data-interaction-keyboard=true] .composer[data-collapsed=true]{display:none}
+@media(max-width:520px){.question-other .question-notes input,.question-other .question-notes textarea{font-size:16px}#interaction-form legend{font-size:14px}.interaction-scroll{padding:8px 10px}}
+.web-app[data-compact-viewport=true]:has(.interaction-card:not([hidden])) .client-header{min-height:44px;padding-top:0;padding-bottom:0}
+.web-app[data-compact-viewport=true]:has(.interaction-card:not([hidden])) .client-brand small,
+.web-app[data-compact-viewport=true]:has(.interaction-card:not([hidden])) .session-meta{display:none}

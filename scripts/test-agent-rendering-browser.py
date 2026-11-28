@@ -186,7 +186,7 @@ try:
  browser.evaluate('document.querySelector("#agent-draft").focus()')
  set_interaction(interaction("question",questions=[{"id":"q","title":"Pick a target","other":False,"options":[{"label":"A"},{"label":"B"}]}]))
  browser.until('Boolean(document.querySelector("#interaction-card input"))')
- assert browser.evaluate('document.querySelector("#sheet-layer").hidden && document.activeElement.id==="agent-draft"')
+ assert browser.evaluate('document.querySelector("#sheet-layer").hidden && !document.querySelector("#interaction-card").contains(document.activeElement) && document.querySelector("#agent-composer").hidden')
  assert not browser.evaluate('Boolean(document.querySelector("[name=notes0]"))')
  browser.evaluate('document.querySelectorAll("[name=q0]")[1].click();document.querySelector("[data-expand-interaction]").click()')
  browser.until('!document.querySelector("#sheet-layer").hidden')
@@ -197,12 +197,94 @@ try:
  browser.until('document.querySelector("#interaction-card").hidden')
  assert commands[-1]["response"]=={"answers":{"q":["B"]}}
  print("PASS Chrome ordinary card without focus theft, Other constraint, draft and native acknowledgement",flush=True)
+ browser.call("Emulation.setDeviceMetricsOverride",{"width":390,"height":844,"deviceScaleFactor":1,"mobile":True})
+ browser.evaluate('(()=>{const f=document.querySelector("#agent-draft");f.value="Preserved conversation draft";f.dispatchEvent(new Event("input",{bubbles:true}));f.blur()})()')
+ set_interaction(interaction("paged",cancellable=True,questions=[
+  {"id":"target","title":"选择执行位置","options":[{"label":"A","description":"在当前工作区执行"},{"label":"B","description":"在另一个隔离目录执行"},{"label":"C","description":"稍后由电脑端选择"},{"label":"D","description":"创建一个新的独立目录"}]},
+  {"id":"features","title":"选择需要开启的能力","multiSelect":True,"options":[{"label":"Read","description":"允许读取相关资料"},{"label":"Write","description":"允许修改指定文件"}]},
+  {"id":"secret","title":"输入测试用密钥","secret":True,"options":[]},
+ ]))
+ browser.until('document.querySelector("#interaction-form")?.dataset.questionId==="target"')
+ assert browser.evaluate('document.querySelectorAll("#interaction-form fieldset:not([hidden])").length===1 && document.querySelector("[data-question-progress]").textContent==="问题 1/3 · 已答 0"')
+ assert browser.evaluate('document.querySelector("#agent-composer").hidden && document.querySelector("#composer-draft-hint").textContent==="草稿已保留" && !document.querySelector(".question-other").open')
+ tap("#composer-toggle")
+ assert browser.evaluate('!document.querySelector("#agent-composer").hidden && document.querySelector("#agent-draft").value==="Preserved conversation draft"')
+ tap("#composer-toggle")
+ assert browser.evaluate('document.querySelector("#agent-composer").hidden')
+ count=len(commands)
+ tap('[data-question-nav="1"]')
+ assert browser.evaluate('document.querySelector("#interaction-form").dataset.questionId==="target" && document.querySelector(".interaction-error").textContent.includes("当前问题")')
+ assert len(commands)==count
+ browser.evaluate('document.querySelectorAll("[name=q0]")[1].click()')
+ assert browser.evaluate('document.querySelector("[data-question-progress]").textContent.includes("已答 1")')
+ browser.call("Emulation.setDeviceMetricsOverride",{"width":390,"height":450,"deviceScaleFactor":1,"mobile":True})
+ browser.until('innerHeight===450')
+ browser.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+ assert browser.evaluate('document.querySelector(".interaction-scroll").clientHeight>=60 && document.querySelector("#conversation").clientHeight>=30 && [...document.querySelectorAll(".question-option")].filter(n=>n.getClientRects().length).every(n=>n.getBoundingClientRect().height>=44)')
+ footer_top=browser.evaluate('document.querySelector(".interaction-footer").getBoundingClientRect().top')
+ browser.evaluate('document.querySelector(".interaction-scroll").scrollTop=9999')
+ assert abs(browser.evaluate('document.querySelector(".interaction-footer").getBoundingClientRect().top')-footer_top)<1
+ shot("paged-questions-mobile.png")
+ browser.evaluate('document.querySelector("#interaction-form").requestSubmit()')
+ assert browser.evaluate('document.querySelector("#interaction-form").dataset.questionId==="features"')
+ assert len(commands)==count,"Selecting or advancing a question sent a partial answer"
+ browser.evaluate('document.querySelectorAll("[name=q1]").forEach(n=>n.click());document.querySelector("[data-question-other=features]").open=true')
+ browser.until('document.querySelector("[data-question-other=features]").open')
+ browser.evaluate('(()=>{const f=document.querySelector("[name=notes1]");f.value="补充能力";f.focus();f.setSelectionRange(1,3);f.dispatchEvent(new Event("input",{bubbles:true}))})()')
+ tap('[data-question-nav="-1"]');tap('[data-question-nav="1"]')
+ assert browser.evaluate('document.querySelectorAll("[name=q1]:checked").length===2 && document.querySelector("[name=notes1]").value==="补充能力" && document.querySelector("[data-question-other=features]").open')
+ tap("[data-expand-interaction]")
+ browser.until('!document.querySelector("#sheet-layer").hidden && document.querySelector("#interaction-form").dataset.questionId==="features"')
+ assert browser.evaluate('document.querySelector("#sheet [data-question-progress]").textContent==="问题 2/3 · 已答 2"')
+ browser.evaluate('(()=>{const f=document.querySelector("[name=notes1]");f.focus();f.setSelectionRange(1,3)})()')
+ # 原生刷新重新排列题目和选项时，按问题 ID 与选项内容保留草稿、当前页和焦点。
+ questions=row["interactions"][0]["data"]["questions"]
+ questions[0]["options"].reverse()
+ row["interactions"][0]["data"]["questions"]=[questions[1],questions[0],questions[2]]
+ row["interactions"][0]["detail"]="Reordered native questions";row["seq"]+=1
+ browser.until('document.querySelector("#sheet .approval-reason").textContent==="Reordered native questions"')
+ assert browser.evaluate('document.querySelector("#interaction-form").dataset.questionId==="features" && document.activeElement.name==="notes0" && document.activeElement.value==="补充能力" && document.activeElement.selectionStart===1 && document.activeElement.selectionEnd===3')
+ assert browser.evaluate('document.querySelectorAll("[name=q0]:checked").length===2 && document.querySelector("[data-question-other=features]").open && document.querySelector("#sheet [data-question-progress]").textContent==="问题 1/3 · 已答 2"')
+ tap("[data-close-sheet]");tap("[data-collapse-interaction]");tap("#interaction-card [data-interaction-open]")
+ assert browser.evaluate('document.querySelector("#interaction-form").dataset.questionId==="features" && document.querySelector("[name=notes0]").value==="补充能力" && document.querySelectorAll("[name=q0]:checked").length===2')
+ tap('[data-question-nav="1"]')
+ assert browser.evaluate('document.querySelector("#interaction-form").dataset.questionId==="target" && document.querySelector("[name=q1]:checked").value==="2"')
+ tap('[data-question-nav="1"]')
+ browser.evaluate('(()=>{const f=document.querySelector("[name=notes2]");f.value="fixture-only-secret";f.dispatchEvent(new Event("input",{bubbles:true}))})()')
+ assert browser.evaluate('document.querySelector("[name=notes2]").type==="password" && !JSON.stringify(sessionStorage).includes("fixture-only-secret")')
+ row["allowControl"]=False;row["seq"]+=1
+ browser.until('document.querySelector("[name=notes2]").disabled')
+ assert browser.evaluate('document.querySelector("[name=notes2]").value==="fixture-only-secret" && !document.querySelector(\'[data-question-nav="-1"]\').disabled && document.querySelector("[data-question-progress]").textContent.includes("已答 3")')
+ browser.evaluate('document.querySelector("#interaction-form").requestSubmit()')
+ assert len(commands)==count
+ row["allowControl"]=True;row["seq"]+=1
+ browser.until('!document.querySelector("[name=notes2]").disabled')
+ # 用 visualViewport 缩小模拟软键盘的可用区域，不声称替代真实手机验收。
+ browser.call("Emulation.setDeviceMetricsOverride",{"width":390,"height":844,"deviceScaleFactor":1,"mobile":True})
+ browser.until('innerHeight===844')
+ browser.evaluate('document.querySelector("[name=notes2]").focus();Object.defineProperty(visualViewport,"height",{configurable:true,get:()=>340});visualViewport.dispatchEvent(new Event("resize"))')
+ browser.until('document.querySelector("#agent-app").dataset.interactionKeyboard==="true"')
+ assert browser.evaluate('(()=>{const footer=document.querySelector(".interaction-footer").getBoundingClientRect(),body=document.querySelector(".interaction-scroll");return footer.bottom<=340 && body.clientHeight>=60 && document.querySelector("#agent-app").getBoundingClientRect().height===340 && document.documentElement.scrollWidth<=390})()')
+ browser.evaluate('delete visualViewport.height;visualViewport.dispatchEvent(new Event("resize"));document.querySelector("[name=notes2]").blur()')
+ browser.until('document.querySelector("#agent-app").dataset.interactionKeyboard==="false"')
+ # 即使最后一页触发提交，也必须完整校验之前的页面。
+ browser.evaluate('(()=>{const f=document.querySelector("[data-question-id=target] input:checked");f.checked=false;f.dispatchEvent(new Event("change",{bubbles:true}));document.querySelector("#interaction-form").requestSubmit()})()')
+ assert browser.evaluate('document.querySelector("#interaction-form").dataset.questionId==="target" && document.querySelector(".interaction-error").textContent.includes("全部问题")')
+ assert len(commands)==count
+ browser.evaluate('document.querySelectorAll("[name=q1]")[2].click()')
+ tap('[data-question-nav="1"]')
+ assert browser.evaluate('document.querySelector("[name=notes2]").value==="fixture-only-secret"')
+ browser.evaluate('document.querySelector("#interaction-form").requestSubmit();document.querySelector("#interaction-form").requestSubmit()')
+ browser.until('document.querySelector("#interaction-card").hidden')
+ assert len(commands)==count+1 and commands[-1]["response"]=={"answers":{"features":["Read","Write","补充能力"],"target":["B"],"secret":["fixture-only-secret"]}}
+ assert browser.evaluate('!document.querySelector("#agent-composer").hidden && document.querySelector("#agent-draft").value==="Preserved conversation draft" && !JSON.stringify(sessionStorage).includes("fixture-only-secret")')
+ print("PASS Chrome compact question pages, fixed navigation, Other, stable identity drafts, secret, readonly, full validation, viewport budget and one complete native reply",flush=True)
  set_interaction(interaction("async","asyncQuestion",False,questions=[{"id":"q","title":"Optional answer","options":[]}]))
  browser.until('document.querySelector("#interaction-card").textContent.includes("async")')
  assert not browser.evaluate('Boolean(document.querySelector("#interaction-form"))')
  browser.evaluate('document.querySelector("#interaction-card [data-interaction-open]").click()')
  browser.until('Boolean(document.querySelector("[name=notes0]"))')
- browser.evaluate('const f=document.querySelector("[name=notes0]");f.value="draft preserved";f.focus();f.setSelectionRange(3,7);f.dispatchEvent(new Event("input",{bubbles:true}))')
+ browser.evaluate('(()=>{const f=document.querySelector("[name=notes0]");f.value="draft preserved";f.focus();f.setSelectionRange(3,7);f.dispatchEvent(new Event("input",{bubbles:true}))})()')
  row["interactions"][0]["detail"]="Updated native prompt";row["seq"]+=1
  browser.until('document.querySelector("#interaction-card").textContent.includes("Updated native prompt")')
  assert browser.evaluate('document.activeElement.name==="notes0" && document.activeElement.value==="draft preserved" && document.activeElement.selectionStart===3 && document.activeElement.selectionEnd===7')
@@ -224,6 +306,46 @@ try:
  browser.until('document.querySelector("#interaction-card").hidden')
  assert commands[-1]["response"]["content"]=={"name":"hello","choice":False,"features":["B"]}
  print("PASS Chrome readable approval, mobile layout, independent background work and form defaults",flush=True)
+ browser.call("Emulation.setDeviceMetricsOverride",{"width":390,"height":450,"deviceScaleFactor":1,"mobile":True})
+ set_interaction(interaction("long-form","form",schema={"type":"object","required":["field9"],"properties":{f"field{i}":{"type":"string","title":f"Field {i}","description":"Native field description"} for i in range(12)}}))
+ browser.until('document.querySelector("#interaction-card").dataset.interactionId==="long-form"')
+ browser.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+ form_footer=browser.evaluate('document.querySelector(".interaction-footer").getBoundingClientRect().top')
+ browser.evaluate('document.querySelector(".interaction-scroll").scrollTop=9999')
+ assert abs(browser.evaluate('document.querySelector(".interaction-footer").getBoundingClientRect().top')-form_footer)<1
+ count=len(commands)
+ browser.evaluate('document.querySelector("#interaction-form").requestSubmit()')
+ assert len(commands)==count and browser.evaluate('document.activeElement.name==="f9"')
+ browser.evaluate('(()=>{const f=document.querySelector("[name=f9]");f.value="Completed";f.dispatchEvent(new Event("input",{bubbles:true}));document.querySelector("#interaction-form").requestSubmit()})()')
+ browser.until('document.querySelector("#interaction-card").hidden')
+ assert commands[-1]["response"]=={"action":"accept","content":{"field9":"Completed"}}
+ for kind in ["confirmation","url"]:
+  pending=interaction("fixed-"+kind,kind,url="https://example.invalid/auth")
+  pending["detail"]="Readable native explanation.\n"*50
+  set_interaction(pending)
+  browser.until(f'document.querySelector("#interaction-card").dataset.interactionId==="fixed-{kind}"')
+  browser.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+  assert browser.evaluate('[...document.querySelectorAll(".interaction-footer button")].every(b=>{const r=b.getBoundingClientRect();return r.height>=44 && document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===b})')
+  before=browser.evaluate('document.querySelector(".interaction-footer").getBoundingClientRect().top')
+  browser.evaluate('document.querySelector(".interaction-scroll").scrollTop=9999')
+  assert abs(browser.evaluate('document.querySelector(".interaction-footer").getBoundingClientRect().top')-before)<1
+  tap('[data-form-action="cancel"]')
+  browser.until('document.querySelector("#interaction-card").hidden')
+  assert commands[-1]["response"]=={"action":"cancel"}
+ browser.call("Emulation.setDeviceMetricsOverride",{"width":390,"height":844,"deviceScaleFactor":1,"mobile":True})
+ browser.until('innerHeight===844')
+ browser.evaluate('(()=>{const f=document.querySelector("#agent-draft");f.focus();f.value="Typing before prompt";f.dispatchEvent(new Event("input",{bubbles:true}))})()')
+ set_interaction(interaction("typing-prompt",cancellable=True,questions=[{"id":"free","title":"Free answer","options":[]}]))
+ browser.until('document.querySelector("#interaction-card").dataset.interactionId==="typing-prompt"')
+ assert browser.evaluate('!document.querySelector("#agent-composer").hidden && document.activeElement.id==="agent-draft" && document.querySelector("#agent-draft").value==="Typing before prompt"')
+ tap("#composer-toggle")
+ browser.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))')
+ assert browser.evaluate('document.querySelector("#agent-composer").hidden && document.querySelector("#interaction-card").getBoundingClientRect().height<parseFloat(getComputedStyle(document.querySelector("#interaction-card")).maxHeight)')
+ tap("[data-interaction-cancel]")
+ browser.until('document.querySelector("#interaction-card").hidden')
+ assert commands[-1]["response"]=={"cancel":True}
+ assert browser.evaluate('!document.querySelector("#agent-composer").hidden && document.querySelector("#agent-draft").value==="Typing before prompt"')
+ print("PASS Chrome form constraints and fixed form/confirmation/URL actions, natural short cards, cancellation and uninterrupted conversation drafts",flush=True)
  row["tasks"]=[
   {"id":"foreground","kind":"shell","state":"running","title":"Foreground command","data":{"backgroundConfirmed":False,"itemId":"command"}},
   {"id":"failed","kind":"agent","state":"failed","title":"Past failure"},
@@ -305,7 +427,7 @@ try:
   browser.call("Emulation.setDeviceMetricsOverride",{"width":width,"height":height,"deviceScaleFactor":1,"mobile":width<760})
   browser.until(f"innerWidth==={width} && innerHeight==={height}")
   browser.evaluate('(async()=>{await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);})()')
-  geometry=browser.evaluate('(()=>{const rect=id=>{const r=document.getElementById(id).getBoundingClientRect();return {x:r.x,w:r.width,y:r.y,b:r.bottom}};return {messages:rect("agent-messages"),card:rect("interaction-card"),composer:rect("agent-composer"),body:rect("conversation"),buttons:[...document.querySelectorAll(".interaction-footer button")].map(b=>{const r=b.getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height,visible:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===b}}),overflow:document.documentElement.scrollWidth};})()')
+  geometry=browser.evaluate('(()=>{const rect=id=>{const r=document.getElementById(id).getBoundingClientRect();return {x:r.x,w:r.width,y:r.y,b:r.bottom}};return {messages:rect("agent-messages"),card:rect("interaction-card"),composer:rect(document.querySelector("#agent-composer").hidden?"composer-mode":"agent-composer"),body:rect("conversation"),buttons:[...document.querySelectorAll(".interaction-footer button")].map(b=>{const r=b.getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:r.height,visible:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===b}}),overflow:document.documentElement.scrollWidth};})()')
   assert abs(geometry["messages"]["x"]-geometry["card"]["x"])<1.1 and abs(geometry["composer"]["x"]-geometry["card"]["x"])<1.1,(width,geometry)
   assert abs(geometry["messages"]["w"]-geometry["card"]["w"])<1.1 and abs(geometry["composer"]["w"]-geometry["card"]["w"])<1.1,(width,geometry)
   assert geometry["overflow"]<=width and geometry["body"]["b"]-geometry["body"]["y"]>20,(width,geometry)

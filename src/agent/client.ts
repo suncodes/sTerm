@@ -6,6 +6,7 @@ import { TimelineView } from "./timeline-view";
 import { activeNotices, importantNotice, noticeFingerprint, noticeKey, NoticeTracker } from "./notices";
 import { blockedHtml, blockReview } from "./blocking";
 import { interactionHtml, readInteraction, tasksHtml, taskLabel } from "./interactions";
+import { questionnaireView, questionPage, syncQuestionnaire, showQuestion, unansweredQuestion, type QuestionnaireView } from "./questionnaire";
 import { runningStates, recordDuration, durationLabel, taskTimingHtml } from "./presentation";
 import type { AgentChange, AgentAction, AgentRoster, AgentSession, AgentInteraction, AgentPermission, AgentNotice } from "./types";
 
@@ -17,13 +18,14 @@ const snapshots=new Map<string,AgentSession>(), drafts=new Map<string,string>();
 const timelineView=new TimelineView(messages);
 let taskTimeline:{key:string;node:HTMLElement;view:TimelineView}|undefined;
 const pendingApprovals=new Set<string>(), submitting=new Set<string>(), queues=new Map<string,string[]>();
-const interactionDrafts=new Map<string,{name:string;value:string;checked:boolean;selected?:boolean[]}[]>();
+type InteractionDraft={fields:{key:string;value:string;checked:boolean;selected?:boolean[]}[];questionnaire?:QuestionnaireView};
+const interactionDrafts=new Map<string,InteractionDraft>(),expandedComposers=new Set<string>();
 const collapsedInteractions=new Set<string>(),expandedInteractions=new Set<string>(),interactionErrors=new Map<string,string>(),clockAnchors=new Map<string,{received:number;clock:number}>();
 const taskOutputs=new Map<string,{text:string;truncated?:boolean}>();
 const pendingBlocks=new Set<string>();
 const noticeTracker=new NoticeTracker(),dismissedNotices=new Set<string>(),seenErrors=new Map<string,string|null>();
 let noticeTimer:number,transientNotice:{scope:string;value:AgentNotice;until:number}|undefined;
-let cardRequest="",cardKey="";
+let cardRequest="",cardKey="",composerRequest="";
 let permissionChoice:AgentPermission|undefined;
 const storedSession="sterm-agent-selection";
 let roster:AgentSession[]=[],current="",authenticated=false,polling=false,connected=false,wasConnected=false;
@@ -62,6 +64,16 @@ function syncControls():void{
   byId<HTMLButtonElement>("agent-send").disabled=!available||sending||!draft.value.trim();
   byId("agent-send").textContent=sending?"确认中…":busy()?"追加":"发送";
   byId("composer").hidden=!available;
+  const blocking=row?.interactions?.find(item=>item.blocking&&!item.agentId),composerKey=blocking?current+":"+row?.sessionId+":"+blocking.id:"";
+  if(composerKey&&document.activeElement===draft&&draft.value.trim())expandedComposers.add(composerKey);
+  composerRequest=composerKey;
+  for(const key of expandedComposers)if(![...snapshots.values()].some(session=>(session.interactions??[]).some(item=>key===session.runtimeId+":"+session.sessionId+":"+item.id)))expandedComposers.delete(key);
+  const composerCollapsed=Boolean(composerKey&&!expandedComposers.has(composerKey));
+  byId("composer").dataset.collapsed=String(composerCollapsed);
+  byId("agent-composer").hidden=composerCollapsed;byId("composer-mode").hidden=!composerKey;
+  byId("composer-toggle").textContent=composerCollapsed?"补充要求":"收起补充输入";
+  byId("composer-toggle").setAttribute("aria-expanded",String(!composerCollapsed));
+  byId("composer-draft-hint").textContent=composerCollapsed&&draft.value?"草稿已保留":"";
   byId("composer-unavailable").hidden=available||row?.state==="blocked";
   byId("composer-unavailable").textContent=!row?"在电脑终端使用 Agent 后，从会话列表选择":!connected?"草稿已保留，恢复连接后可继续发送":row.state==="exited"?"会话已结束，内容已保留":!row.allowControl?"当前为只读，电脑端可修改分享权限":row.state==="offline"?"Agent 已断开，等待电脑端恢复":row.state==="blocked"?"请查看安全阻断卡片中的可用操作":"正在连接 Agent…";
   byId("agent-input-hint").textContent=busy()?"由当前 Agent 安排执行":"电脑端与网页均可操作";
@@ -83,16 +95,19 @@ function syncControls():void{
   for(const button of byId("interaction-card").querySelectorAll<HTMLButtonElement>("[data-interaction-open],[data-expand-interaction],[data-collapse-interaction]"))button.disabled=!connected;
   const interaction= row?.interactions?.find(item=>item.id===cardRequest),interactionWritable=write&&!(row?.activity?.kind==="blocked"&&!interaction?.agentId);
   for(const field of byId("interaction-card").querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,textarea,select,button[data-interaction-decision],button[data-permission-scope],button[data-form-action],button[data-interaction-cancel],button[type=submit]"))field.disabled=!interactionWritable||pendingApprovals.has(current+":"+cardRequest);
+  for(const button of byId("interaction-card").querySelectorAll<HTMLButtonElement>("[data-question-nav]"))button.disabled=pendingApprovals.has(current+":"+cardRequest);
   if(sheetType==="queue")for(const button of byId("sheet").querySelectorAll<HTMLButtonElement>("button[data-queue-operation]")){button.disabled=!write||(button.dataset.queueOperation==="up"&&button.closest(".queued-item")===byId("sheet").querySelector(".queued-item"));}
   if(sheetType==="interaction"){
     for(const field of byId("sheet").querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,textarea,select,button:not([data-close-sheet])"))field.disabled=!write||row?.activity?.kind==="blocked"&&!row.interactions?.find(item=>item.id===sheetRequest)?.agentId||pendingApprovals.has(current+":"+sheetRequest);
   }
+  if(sheetType==="interaction")for(const button of byId("sheet").querySelectorAll<HTMLButtonElement>("[data-question-nav]"))button.disabled=pendingApprovals.has(current+":"+sheetRequest);
   const blocked=byId("blocked-card"),review=row?blockReview(row):undefined,ack=blocked.querySelector<HTMLInputElement>("[data-block-acknowledge]"),resume=blocked.querySelector<HTMLButtonElement>("[data-block-continue]");
   const blockPending=Boolean(review&&pendingBlocks.has(review.key));
   if(ack)ack.disabled=!write||blockPending||!review?.canContinue;
   if(resume)resume.disabled=!write||blockPending||!review?.canContinue||!ack?.checked||!blocked.querySelector<HTMLDetailsElement>(".block-findings")?.open;
   if(sheetType==="end-confirm"&&!write)closeSheet();
   if(["models","policy","permission-confirm"].includes(sheetType)&&(!write||!row||!["idle","failed","interrupted"].includes(row.state)))closeSheet();
+  scheduleInteractionLayout();
 }
 async function command(action:AgentAction,row=active()):Promise<void>{
   if(!row||!writable(row))throw new Error("当前会话不可操作");
@@ -215,7 +230,7 @@ function fillSheet():void{
   else if(sheetType==="interaction"&&row){
     const item=row.interactions?.find(i=>i.id===sheetRequest);
     if(!item){closeSheet();return;}
-    html=heading(esc(item.title))+'<div data-interaction-id="'+esc(item.id)+'">'+interactionHtml(item,writable()&&!pendingApprovals.has(current+":"+item.id),row)+'</div>';
+    html=heading(esc(item.title))+'<div data-interaction-id="'+esc(item.id)+'">'+interactionHtml(item,writable()&&!pendingApprovals.has(current+":"+item.id),row)+'<p class="interaction-error" role="status">'+esc(interactionErrors.get(current+":"+item.id)??(pendingApprovals.has(current+":"+item.id)?"正在等待原生确认…":""))+'</p></div>';
   }
   else if(sheetType==="tasks"&&row)html=heading("任务记录")+(tasksHtml(row)||'<p class="sheet-description">暂无任务记录。</p>');
   else if(sheetType==="notices"&&row)html=heading("运行提示记录")+(row.notices??[]).slice().reverse().map(entry=>'<section class="notice-entry"><strong>'+esc(entry.title)+'</strong><p>'+esc(entry.message)+'</p></section>').join("");
@@ -249,10 +264,13 @@ function updateSheet():void{
   if(!sheetType)return;
   const row=active(),key=sheetType==="interaction"?JSON.stringify([current,row?.sessionId,sheetRequest,row?.interactions?.find(i=>i.id===sheetRequest),writable(),[...pendingApprovals]]):JSON.stringify([sheetType,sheetRequest,roster.map(r=>[r.runtimeId,r.title,r.state,r.allowControl]),row?.approvals,row?.interactions,row?.tasks,row?.notices,row?.permissions,row?.queuedInputs,sheetType==="task-detail"?row?.items.filter(i=>i.agentId===sheetRequest||i.id===row?.tasks.find(task=>task.id===sheetRequest)?.data?.itemId):undefined,row?.allowControl,row?.model,row?.policy,[...pendingApprovals]]);
   if(sheetKey===key)return;sheetKey=key;
-  const focused=document.activeElement as HTMLInputElement|null,fieldIndex=[...byId("sheet").querySelectorAll("input,textarea,select")].indexOf(focused!),selection=focused&&typeof focused.selectionStart==="number"?[focused.selectionStart,focused.selectionEnd]:null,keyAttr=focused?.dataset.select,decision=focused?.dataset.decision;
-  const sheetScroll=byId("sheet").scrollTop;
-  saveInteractionDraft();fillSheet();byId("sheet").scrollTop=sheetScroll;if(keyAttr)byId("sheet").querySelector<HTMLButtonElement>('[data-select="'+CSS.escape(keyAttr)+'"]')?.focus();
-  else if(fieldIndex>=0){const field=byId("sheet").querySelectorAll<HTMLInputElement>("input,textarea,select")[fieldIndex];field?.focus();if(field&&selection&&["text","search","url","tel","password"].includes(field.type)||field?.tagName==="TEXTAREA"){try{field?.setSelectionRange(selection?.[0]??0,selection?.[1]??0);}catch{/* 原生类型不提供选区。 */}}}
+  const focused=document.activeElement as HTMLInputElement|null,fieldIndex=[...byId("sheet").querySelectorAll("input,textarea,select")].indexOf(focused!),selection=focused&&typeof focused.selectionStart==="number"?[focused.selectionStart,focused.selectionEnd]:null,keyAttr=focused?.dataset.select,decision=focused?.dataset.decision,focusedKey=focused?.dataset.fieldKey;
+  const detailState=[...byId("sheet").querySelectorAll<HTMLDetailsElement>("details:not(.question-other)")].map(detail=>detail.open);
+  const sheetScroll=byId("sheet").scrollTop,interactionScroll=byId("sheet").querySelector(".interaction-scroll")?.scrollTop??0;
+  saveInteractionDraft();fillSheet();byId("sheet").scrollTop=sheetScroll;const scroll=byId("sheet").querySelector(".interaction-scroll");if(scroll)scroll.scrollTop=interactionScroll;
+  [...byId("sheet").querySelectorAll<HTMLDetailsElement>("details:not(.question-other)")].forEach((detail,index)=>{if(detailState[index]!=null)detail.open=detailState[index];});
+  if(keyAttr)byId("sheet").querySelector<HTMLButtonElement>('[data-select="'+CSS.escape(keyAttr)+'"]')?.focus();
+  else if(fieldIndex>=0){const fields=[...byId("sheet").querySelectorAll<HTMLInputElement>("input,textarea,select")],field=focusedKey?fields.find(field=>field.dataset.fieldKey===focusedKey):fields[fieldIndex];if(field?.getClientRects().length)field.focus({preventScroll:true});if(field&&selection&&["text","search","url","tel","password"].includes(field.type)||field?.tagName==="TEXTAREA"){try{field?.setSelectionRange(selection?.[0]??0,selection?.[1]??0);}catch{/* 原生类型不提供选区。 */}}}
   else if(decision!==undefined)byId("sheet").querySelector<HTMLButtonElement>('[data-decision="'+decision+'"]')?.focus();
 }
 function openSheet(type:string):void{
@@ -292,6 +310,12 @@ async function authenticate():Promise<void>{
 document.addEventListener("click",event=>{
   const target=(event.target as Element).closest<HTMLButtonElement>("button");
   if(target?.disabled)return;
+  if(target?.id==="composer-toggle"){
+    if(!composerRequest)return;
+    if(expandedComposers.has(composerRequest)){expandedComposers.delete(composerRequest);target.focus();}
+    else expandedComposers.add(composerRequest);
+    syncControls();if(!byId("agent-composer").hidden)draft.focus();return;
+  }
   if(target?.dataset.taskOutput){const row=active(),taskId=target.dataset.taskOutput;if(!row||!connected)return;target.disabled=true;void request<{text:string;truncated?:boolean}>("/api/agents/"+encodeURIComponent(row.runtimeId)+"/tasks/"+encodeURIComponent(taskId)+"/output").then(output=>{taskOutputs.set(row.runtimeId+":"+row.sessionId+":"+taskId,output);if(taskOutputs.size>32)taskOutputs.delete(taskOutputs.keys().next().value!);if(current===row.runtimeId&&sheetType==="task-detail"&&sheetRequest===taskId)fillSheet();}).catch(error=>{showNotice(error instanceof Error?error.message:String(error));target.disabled=false;});return;}
   if(target?.dataset.interactionOpen){saveCardDraft();cardRequest=target.dataset.interactionOpen;const row=active();if(row){const key=current+":"+row.sessionId+":"+cardRequest;collapsedInteractions.delete(key);expandedInteractions.add(key);if(sheetType==="task-detail")closeSheet();cardKey="";renderInteractions(row);}return;}
   if(target?.hasAttribute("data-collapse-interaction")){saveCardDraft();collapsedInteractions.add(current+":"+active()?.sessionId+":"+cardRequest);cardKey="";const row=active();if(row)renderInteractions(row);return;}
@@ -320,6 +344,7 @@ document.addEventListener("click",event=>{
   const interactionId=button.closest<HTMLElement>("[data-interaction-id]")?.dataset.interactionId;
   const interaction=active()?.interactions?.find(item=>item.id===interactionId);
   if(interaction){
+    if(button.dataset.questionNav){const root=button.closest<HTMLElement>("[data-interaction-id]")!;navigateQuestion(root,interaction,Number(button.dataset.questionNav));return;}
     if(button.dataset.interactionDecision!==undefined){void answerInteraction(interaction,{decision:interaction.data.decisions?.[Number(button.dataset.interactionDecision)]?.value});return;}
     if(button.dataset.permissionScope){void answerInteraction(interaction,{scope:button.dataset.permissionScope});return;}
     if(button.dataset.formAction){void answerInteraction(interaction,{action:button.dataset.formAction});return;}
@@ -354,20 +379,27 @@ document.addEventListener("click",event=>{
   if(button.dataset.font){displaySize=Math.max(11,Math.min(19,displaySize+Number(button.dataset.font)));messages.style.fontSize=displaySize+"px";fillSheet();}
 });
 function formDraftKey():string{return current+":"+(active()?.sessionId??"")+":"+sheetRequest+":"+sheetType;}
+function captureFields(root:HTMLElement):InteractionDraft{
+  return {fields:[...root.querySelectorAll<HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement>("input,textarea,select")].map(field=>({key:field.dataset.fieldKey??field.name,value:field.value,checked:field instanceof HTMLInputElement&&field.checked,selected:field instanceof HTMLSelectElement?[...field.options].map(option=>option.selected):undefined})),questionnaire:questionnaireView(root)};
+}
 function saveInteractionDraft():void{
   saveCardDraft();
   if(!["interaction","queue"].includes(sheetType))return;
-  interactionDrafts.set(formDraftKey(),[...byId("sheet").querySelectorAll<HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement>("input,textarea,select")].map(field=>({name:field.name,value:field.value,checked:field instanceof HTMLInputElement&&field.checked,selected:field instanceof HTMLSelectElement?[...field.options].map(o=>o.selected):undefined})));
+  interactionDrafts.set(formDraftKey(),captureFields(byId("sheet")));
 }
-function restoreInteractionDraft():void{
-  const saved=interactionDrafts.get(formDraftKey());if(!saved)return;
-  const fields=[...byId("sheet").querySelectorAll<HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement>("input,textarea,select")];
-  for(const [index,value] of saved.entries()){
-    const field=fields[index];if(!field||field.name!==value.name)continue;
-    if(field instanceof HTMLInputElement&&["radio","checkbox"].includes(field.type))field.checked=value.checked;
-    else field.value=value.value;
-    if(field instanceof HTMLSelectElement&&value.selected)[...field.options].forEach((o,i)=>o.selected=Boolean(value.selected?.[i]));
+function restoreInteractionDraft():void{restoreFields(byId("sheet"),formDraftKey());}
+function interactionFeedback(item:AgentInteraction,message=""):void{
+  const key=current+":"+item.id;if(message)interactionErrors.set(key,message);else interactionErrors.delete(key);
+  for(const root of document.querySelectorAll<HTMLElement>("[data-interaction-id]"))if(root.dataset.interactionId===item.id){
+    const status=root.querySelector<HTMLElement>(".interaction-error");if(status)status.textContent=message;
   }
+  scheduleInteractionLayout();
+}
+function navigateQuestion(root:HTMLElement,item:AgentInteraction,direction:number):void{
+  if(pendingApprovals.has(current+":"+item.id))return;
+  const page=questionPage(root,item);
+  if(direction>0&&writable()&&unansweredQuestion(root,item,page)>=0){interactionFeedback(item,"请先回答当前问题");return;}
+  interactionFeedback(item);showQuestion(root,item,page+direction);saveInteractionDraft();
 }
 async function answerInteraction(item:AgentInteraction,response:unknown):Promise<void>{
   const row=active();if(!row||!writable())return;
@@ -401,25 +433,30 @@ function renderInteractions(row:AgentSession):void{
   const signature=JSON.stringify([current,selected,collapsed,inSheet,writable(),pendingApprovals.has(current+":"+cardRequest),interactionErrors.get(current+":"+cardRequest),row.items.find(item=>(item.agentId||"")===(selected.agentId||"")&&(item.id===nativeItemId||item.data?.id===nativeItemId))?.data]);
   if(cardKey===signature)return;
   const sameRequest=card.dataset.draftKey===selectionKey+":interaction";
-  const focused=document.activeElement as HTMLInputElement|null,fields=[...card.querySelectorAll("input,textarea,select,button")],fieldIndex=sameRequest?fields.indexOf(focused!):-1,selection=focused&&typeof focused.selectionStart==="number"?[focused.selectionStart,focused.selectionEnd!]:undefined;
-  const details=sameRequest?[...card.querySelectorAll("details")].map(detail=>detail.open):[],scroll=sameRequest?(card.querySelector(".interaction-scroll")??card.querySelector(".interaction-card-body"))?.scrollTop??0:0;
+  const focused=document.activeElement as HTMLInputElement|null,fields=[...card.querySelectorAll("input,textarea,select,button")],fieldIndex=sameRequest?fields.indexOf(focused!):-1,selection=focused&&typeof focused.selectionStart==="number"?[focused.selectionStart,focused.selectionEnd!]:undefined,focusedKey=focused?.dataset.fieldKey;
+  const details=sameRequest?[...card.querySelectorAll<HTMLDetailsElement>("details:not(.question-other)")].map(detail=>detail.open):[],scroll=sameRequest?(card.querySelector(".interaction-scroll")??card.querySelector(".interaction-card-body"))?.scrollTop??0:0;
   saveCardDraft();cardKey=signature;
   card.dataset.kind=selected.kind;card.dataset.interactionId=cardRequest;card.dataset.draftKey=current+":"+row.sessionId+":"+cardRequest+":interaction";
-  card.innerHTML='<div class="interaction-card-heading"><div><strong>'+esc(selected.title)+'</strong><small>'+esc(selected.agentId?"子 Agent":"主 Agent")+' · '+(selected.blocking?"等待回答":"可随时回答")+' · '+(items.findIndex(item=>item.id===cardRequest)+1)+' / '+items.length+'</small></div><div>'+(collapsed||inSheet?'<button class="touch-button" data-interaction-open="'+esc(cardRequest)+'">展开</button>':'<button class="touch-button" data-expand-interaction aria-label="放大详情">'+icon("expand")+'</button><button class="touch-button" data-collapse-interaction aria-label="收起待办">'+icon("down")+'</button>')+'</div></div>'+(collapsed||inSheet?"":'<div class="interaction-card-body">'+interactionHtml(selected,writable()&&!pendingApprovals.has(current+":"+cardRequest),row)+'</div>')+'<p class="interaction-error" role="status">'+esc(interactionErrors.get(current+":"+cardRequest)??(pendingApprovals.has(current+":"+cardRequest)?"正在等待原生确认…":""))+'</p>';
+  card.innerHTML='<div class="interaction-card-heading"><div><strong>'+esc(selected.title)+'</strong><small>'+esc(selected.agentId?"子 Agent":"主 Agent")+' · '+((selected.data.questions?.length??0)>1?(collapsed||inSheet?"共 "+selected.data.questions!.length+" 题":'<span data-question-progress role="status"></span>'):selected.blocking?"等待回答":"可随时回答")+(items.length>1?' · 待办 '+(items.findIndex(item=>item.id===cardRequest)+1)+'/'+items.length:"")+'</small></div><div>'+(collapsed||inSheet?'<button class="touch-button" data-interaction-open="'+esc(cardRequest)+'">展开</button>':'<button class="touch-button" data-expand-interaction aria-label="放大详情">'+icon("expand")+'</button><button class="touch-button" data-collapse-interaction aria-label="收起待办">'+icon("down")+'</button>')+'</div></div>'+(collapsed||inSheet?"":'<div class="interaction-card-body">'+interactionHtml(selected,writable()&&!pendingApprovals.has(current+":"+cardRequest),row)+'</div>')+'<p class="interaction-error" role="status">'+esc(interactionErrors.get(current+":"+cardRequest)??(pendingApprovals.has(current+":"+cardRequest)?"正在等待原生确认…":""))+'</p>';
   restoreFields(card,card.dataset.draftKey);
-  if(fieldIndex>=0){const field=card.querySelectorAll<HTMLInputElement>("input,textarea,select,button")[fieldIndex];field?.focus({preventScroll:true});if(selection&&field?.setSelectionRange)field.setSelectionRange(selection[0],selection[1]);}
-  [...card.querySelectorAll("details")].forEach((detail,index)=>{if(details[index]!=null)detail.open=details[index];});
+  if(fieldIndex>=0){const fields=[...card.querySelectorAll<HTMLInputElement>("input,textarea,select,button")],field=focusedKey?fields.find(field=>field.dataset.fieldKey===focusedKey):fields[fieldIndex];if(field?.getClientRects().length)field.focus({preventScroll:true});if(selection&&field?.setSelectionRange&&(["text","search","url","tel","password"].includes(field.type)||field.tagName==="TEXTAREA"))field.setSelectionRange(selection[0],selection[1]);}
+  [...card.querySelectorAll<HTMLDetailsElement>("details:not(.question-other)")].forEach((detail,index)=>{if(details[index]!=null)detail.open=details[index];});
   const scrollBody=card.querySelector(".interaction-scroll")??card.querySelector(".interaction-card-body");if(scrollBody)scrollBody.scrollTop=scroll;
 }
 
 function saveCardDraft():void{
   const card=byId("interaction-card");if(!card?.dataset.draftKey||!card.querySelector("input,textarea,select"))return;
-  interactionDrafts.set(card.dataset.draftKey,[...card.querySelectorAll<HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement>("input,textarea,select")].map(field=>({name:field.name,value:field.value,checked:field instanceof HTMLInputElement&&field.checked,selected:field instanceof HTMLSelectElement?[...field.options].map(option=>option.selected):undefined})));
+  interactionDrafts.set(card.dataset.draftKey,captureFields(card));
 }
 function restoreFields(root:HTMLElement,key:string):void{
-  const saved=interactionDrafts.get(key);if(!saved)return;
-  const fields=[...root.querySelectorAll<HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement>("input,textarea,select")];
-  for(const [index,value] of saved.entries()){const field=fields[index];if(!field||field.name!==value.name)continue;if(field instanceof HTMLInputElement&&["radio","checkbox"].includes(field.type))field.checked=value.checked;else field.value=value.value;if(field instanceof HTMLSelectElement&&value.selected)[...field.options].forEach((option,position)=>option.selected=Boolean(value.selected?.[position]));}
+  const saved=interactionDrafts.get(key),values=new Map(saved?.fields.map(field=>[field.key,field]));
+  for(const field of root.querySelectorAll<HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement>("input,textarea,select")){
+    const value=values.get(field.dataset.fieldKey??field.name);if(!value)continue;
+    if(field instanceof HTMLInputElement&&["radio","checkbox"].includes(field.type))field.checked=value.checked;else field.value=value.value;
+    if(field instanceof HTMLSelectElement&&value.selected)[...field.options].forEach((option,position)=>option.selected=Boolean(value.selected?.[position]));
+  }
+  const item=active()?.interactions?.find(item=>item.id===root.querySelector<HTMLFormElement>("#interaction-form")?.dataset.interaction);
+  if(item){syncQuestionnaire(root,item,saved?.questionnaire);for(const button of root.querySelectorAll<HTMLButtonElement>("[data-question-nav]"))button.disabled=pendingApprovals.has(current+":"+item.id);}
 }
 function updateActivity(row:AgentSession):void{
   const turn=[...(row.turns??[])].reverse().find(entry=>!entry.agentId),anchor=clockAnchors.get(row.runtimeId);
@@ -442,12 +479,27 @@ function updateTaskTimers(row:AgentSession):void{
   for(const element of document.querySelectorAll<HTMLElement>("[data-task-started]"))element.textContent=(element.dataset.timeSource==="observed"?"约 ":"")+durationLabel(Math.max(0,now-Number(element.dataset.taskStarted)));
 }
 setInterval(()=>{const row=active();if(row)updateActivity(row);},1000);
-document.addEventListener("input",event=>{if(byId("sheet").contains(event.target as Node))saveInteractionDraft();else if(byId("interaction-card").contains(event.target as Node))saveCardDraft();});
-document.addEventListener("change",event=>{if(byId("blocked-card").contains(event.target as Node))syncControls();else if(byId("sheet").contains(event.target as Node))saveInteractionDraft();else if(byId("interaction-card").contains(event.target as Node))saveCardDraft();});
+function interactionInput(target:EventTarget|null):void{
+  if(!(target instanceof Element))return;
+  const root=target.closest<HTMLElement>("[data-interaction-id]"),item=active()?.interactions?.find(item=>item.id===root?.dataset.interactionId);
+  if(root&&item){
+    syncQuestionnaire(root,item);
+    if(["请先回答当前问题","请回答全部问题"].includes(interactionErrors.get(current+":"+item.id)??"")&&unansweredQuestion(root,item,questionPage(root,item))<0)interactionFeedback(item);
+  }
+  if(byId("sheet").contains(target))saveInteractionDraft();else if(byId("interaction-card").contains(target))saveCardDraft();
+}
+document.addEventListener("input",event=>interactionInput(event.target));
+document.addEventListener("change",event=>{if(byId("blocked-card").contains(event.target as Node))syncControls();else interactionInput(event.target);});
+document.addEventListener("toggle",event=>{if((event.target as Element)?.matches(".question-other"))interactionInput(event.target);},true);
 document.addEventListener("submit",event=>{
   const form=event.target as HTMLFormElement;if(form.id!=="interaction-form")return;
-  event.preventDefault();const item=active()?.interactions?.find(i=>i.id===form.dataset.interaction);if(!item||!writable())return;
-  try{void answerInteraction(item,readInteraction(item,form));}catch(error){const message=error instanceof Error?error.message:String(error);interactionErrors.set(current+":"+item.id,message);const row=active();if(row)renderInteractions(row);showNotice(message);}
+  event.preventDefault();const item=active()?.interactions?.find(i=>i.id===form.dataset.interaction);if(!item||!writable()||pendingApprovals.has(current+":"+item.id))return;
+  const root=form.closest<HTMLElement>("[data-interaction-id]")!;
+  if(item.data.questions?.length&&questionPage(root,item)<item.data.questions.length-1){navigateQuestion(root,item,1);return;}
+  try{void answerInteraction(item,readInteraction(item,form));}catch(error){
+    const missing=unansweredQuestion(root,item);if(missing>=0)showQuestion(root,item,missing);
+    interactionFeedback(item,error instanceof Error?error.message:String(error));saveInteractionDraft();
+  }
 });
 byId("queue-add").onclick=()=>{
   const row=active(),text=draft.value,id=current;if(!row?.capabilities.queue||!text.trim()||submitting.has(id))return;
@@ -477,9 +529,35 @@ byId("dismiss-native-notice").onclick=()=>{
 byId("sheet-layer").querySelector(".sheet-scrim")!.addEventListener("click",()=>closeSheet());
 document.addEventListener("keydown",event=>{
   if(event.key==="Escape"&&sheetType){event.preventDefault();closeSheet();}
-  if(event.key==="Tab"&&sheetType){const nodes=[...byId("sheet").querySelectorAll<HTMLButtonElement>("button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href]")],first=nodes[0],last=nodes[nodes.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}
+  if(event.key==="Tab"&&sheetType){const nodes=[...byId("sheet").querySelectorAll<HTMLButtonElement>("button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href],summary")].filter(node=>node.getClientRects().length>0),first=nodes[0],last=nodes[nodes.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}
 });
-function viewport():void{document.documentElement.style.setProperty("--viewport-height",(window.visualViewport?.height??window.innerHeight)+"px");}
+let interactionLayoutFrame=0;
+function scheduleInteractionLayout():void{
+  if(interactionLayoutFrame)return;
+  interactionLayoutFrame=requestAnimationFrame(()=>{
+    interactionLayoutFrame=0;
+    const layout=byId("agent-layout"),cards=[byId("interaction-card"),byId("blocked-card")].filter(card=>!card.hidden);
+    if(layout.hidden||!cards.length)return;
+    const height=layout.getBoundingClientRect().height;
+    const outerHeight=(node:HTMLElement):number=>{if(!node.getClientRects().length)return 0;const style=getComputedStyle(node);return node.getBoundingClientRect().height+(parseFloat(style.marginTop)||0)+(parseFloat(style.marginBottom)||0);};
+    const fixed=[...layout.children].filter((node):node is HTMLElement=>node instanceof HTMLElement&&node.id!=="conversation"&&!cards.includes(node)).reduce((sum,node)=>sum+outerHeight(node),0);
+    const margins=cards.reduce((sum,node)=>{const style=getComputedStyle(node);return sum+(parseFloat(style.marginTop)||0)+(parseFloat(style.marginBottom)||0);},0);
+    const history=Math.min(96,Math.max(30,height*.14)),budget=Math.max(0,(height-fixed-margins-history)/cards.length);
+    for(const card of cards)card.style.setProperty("--interaction-max-height",Math.floor(budget)+"px");
+  });
+}
+function viewport():void{
+  const height=window.visualViewport?.height??window.innerHeight,app=byId("agent-app");
+  document.documentElement.style.setProperty("--viewport-height",height+"px");
+  app.dataset.compactViewport=String(height<=520);
+  const editing=document.activeElement?.closest("#interaction-form");
+  app.dataset.interactionKeyboard=String(Boolean(editing&&innerWidth<=520&&innerHeight-height>120));
+  scheduleInteractionLayout();
+}
+const interactionResize=new ResizeObserver(scheduleInteractionLayout);
+interactionResize.observe(byId("agent-layout"));
+for(const node of byId("agent-layout").children)if(node.id!=="conversation"&&node.id!=="interaction-card"&&node.id!=="blocked-card")interactionResize.observe(node);
+document.addEventListener("focusin",viewport);document.addEventListener("focusout",()=>requestAnimationFrame(viewport));
 window.visualViewport?.addEventListener("resize",viewport);window.addEventListener("resize",viewport);viewport();
 const querySession=new URLSearchParams(location.search).get("session");if(querySession)current=querySession;
 draft.value=restoreDraft(current);
